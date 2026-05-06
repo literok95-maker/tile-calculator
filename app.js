@@ -2,6 +2,9 @@ const canvas = document.querySelector("#planner");
 const ctx = canvas.getContext("2d");
 
 const controls = {
+  drawUnit: document.querySelector("#drawUnit"),
+  gridStep: document.querySelector("#gridStep"),
+  angleSnap: document.querySelector("#angleSnap"),
   tileWidth: document.querySelector("#tileWidth"),
   tileHeight: document.querySelector("#tileHeight"),
   grout: document.querySelector("#grout"),
@@ -26,15 +29,27 @@ const state = {
   ],
   closed: true,
   draggingIndex: -1,
-  scale: 1,
+  previousDrawUnit: "cm",
+  viewportWidth: 1120,
+  viewportHeight: 760,
 };
 
 const basePixelsPerCm = 2;
-const snapCm = 10;
 const origin = { x: 64, y: 64 };
+const unitToCm = {
+  mm: 0.1,
+  cm: 1,
+  m: 100,
+};
+const unitLabels = {
+  mm: "мм",
+  cm: "см",
+  m: "м",
+};
+const snapAngles = [0, 90];
 
 function pxPerCm() {
-  return basePixelsPerCm * Number(controls.scale.value);
+  return basePixelsPerCm * Math.max(Number(controls.scale.value) || 1, 0.1);
 }
 
 function cmToPx(value) {
@@ -45,19 +60,77 @@ function pxToCm(value) {
   return value / pxPerCm();
 }
 
+function drawUnit() {
+  return controls.drawUnit.value;
+}
+
+function drawingStepCm() {
+  return Math.max(Number(controls.gridStep.value) || 1, 0.01) * unitToCm[drawUnit()];
+}
+
+function visibleGridStepCm() {
+  let stepCm = drawingStepCm();
+  while (cmToPx(stepCm) < 8) {
+    stepCm *= 2;
+  }
+  return stepCm;
+}
+
+function formatDrawingLength(cmValue) {
+  const value = cmValue / unitToCm[drawUnit()];
+  const rounded = Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return `${Number(rounded)} ${unitLabels[drawUnit()]}`;
+}
+
 function snapPoint(point) {
-  const snapPx = cmToPx(snapCm);
+  const snapPx = cmToPx(drawingStepCm());
   return {
     x: Math.round(point.x / snapPx) * snapPx,
     y: Math.round(point.y / snapPx) * snapPx,
   };
 }
 
+function snapAnglePoint(anchor, rawPoint) {
+  if (!controls.angleSnap.checked) return rawPoint;
+  const dx = rawPoint.x - anchor.x;
+  const dy = rawPoint.y - anchor.y;
+  const length = Math.hypot(dx, dy);
+  if (length < 1) return rawPoint;
+
+  const rawDegrees = Math.atan2(dy, dx) * (180 / Math.PI);
+  const normalized = ((rawDegrees % 360) + 360) % 360;
+  const quadrant = Math.floor(normalized / 90);
+  const local = normalized - quadrant * 90;
+  const nearestLocal = snapAngles.reduce((best, angle) => (
+    Math.abs(angle - local) < Math.abs(best - local) ? angle : best
+  ), snapAngles[0]);
+  const snappedDegrees = quadrant * 90 + nearestLocal;
+  const radians = snappedDegrees * (Math.PI / 180);
+  return {
+    x: anchor.x + Math.cos(radians) * length,
+    y: anchor.y + Math.sin(radians) * length,
+  };
+}
+
+function snapDrawingPoint(point, anchor = null) {
+  if (!anchor) return snapPoint(point);
+  if (!controls.angleSnap.checked) return snapPoint(point);
+  const angleSnapped = snapAnglePoint(anchor, point);
+  const length = distance(anchor, angleSnapped);
+  const stepPx = cmToPx(drawingStepCm());
+  const snappedLength = Math.max(Math.round(length / stepPx) * stepPx, stepPx);
+  const angle = Math.atan2(angleSnapped.y - anchor.y, angleSnapped.x - anchor.x);
+  return {
+    x: anchor.x + Math.cos(angle) * snappedLength,
+    y: anchor.y + Math.sin(angle) * snappedLength,
+  };
+}
+
 function pointerPosition(event) {
   const rect = canvas.getBoundingClientRect();
   return {
-    x: (event.clientX - rect.left) * (canvas.width / rect.width),
-    y: (event.clientY - rect.top) * (canvas.height / rect.height),
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
   };
 }
 
@@ -118,6 +191,42 @@ function tileIntersectsPolygon(tile, polygon) {
   return false;
 }
 
+function tileCoverage(tile, polygon) {
+  const samplesPerSide = 10;
+  let inside = 0;
+  let insideX = 0;
+  let insideY = 0;
+  const horizontal = {
+    x: tile[1].x - tile[0].x,
+    y: tile[1].y - tile[0].y,
+  };
+  const vertical = {
+    x: tile[3].x - tile[0].x,
+    y: tile[3].y - tile[0].y,
+  };
+
+  for (let y = 0; y < samplesPerSide; y += 1) {
+    for (let x = 0; x < samplesPerSide; x += 1) {
+      const u = (x + 0.5) / samplesPerSide;
+      const v = (y + 0.5) / samplesPerSide;
+      const sample = {
+        x: tile[0].x + horizontal.x * u + vertical.x * v,
+        y: tile[0].y + horizontal.y * u + vertical.y * v,
+      };
+      if (pointInPolygon(sample, polygon)) {
+        inside += 1;
+        insideX += sample.x;
+        insideY += sample.y;
+      }
+    }
+  }
+
+  return {
+    ratio: inside / (samplesPerSide * samplesPerSide),
+    labelPoint: inside > 0 ? { x: insideX / inside, y: insideY / inside } : null,
+  };
+}
+
 function rotatedPoint(cx, cy, x, y, angle) {
   const cos = Math.cos(angle);
   const sin = Math.sin(angle);
@@ -150,9 +259,66 @@ function boundsFor(points) {
   );
 }
 
+function tileCenter(tile) {
+  return {
+    x: tile.points.reduce((sum, point) => sum + point.x, 0) / tile.points.length,
+    y: tile.points.reduce((sum, point) => sum + point.y, 0) / tile.points.length,
+  };
+}
+
+function roundedRectPath(x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+}
+
+function assignTileNumbers(tiles) {
+  let nextSourceNumber = 1;
+  const cutBins = [];
+
+  tiles
+    .filter((tile) => tile.full)
+    .forEach((tile) => {
+      tile.sourceNumber = nextSourceNumber;
+      tile.label = String(nextSourceNumber);
+      nextSourceNumber += 1;
+    });
+
+  tiles
+    .filter((tile) => !tile.full)
+    .sort((a, b) => b.coverage - a.coverage)
+    .forEach((tile) => {
+      let bin = cutBins.find((candidate) => candidate.remaining + 0.001 >= tile.coverage);
+      if (!bin) {
+        bin = {
+          sourceNumber: nextSourceNumber,
+          remaining: 1,
+          fragmentCount: 0,
+        };
+        cutBins.push(bin);
+        nextSourceNumber += 1;
+      }
+
+      bin.fragmentCount += 1;
+      bin.remaining -= tile.coverage;
+      tile.sourceNumber = bin.sourceNumber;
+      tile.fragmentNumber = bin.fragmentCount;
+      tile.label = `${bin.sourceNumber}.${bin.fragmentNumber}`;
+    });
+
+  return nextSourceNumber - 1;
+}
+
 function calculateTiles() {
   if (!state.closed || state.points.length < 3) {
-    return { tiles: [], cut: 0 };
+    return { tiles: [], cut: 0, materialTiles: 0 };
   }
 
   const tileWidth = cmToPx(Number(controls.tileWidth.value) + Number(controls.grout.value) / 10);
@@ -176,39 +342,74 @@ function calculateTiles() {
     for (let x = startX; x <= endX; x += tileWidth) {
       const tile = tilePolygon(x, y, tileWidth, tileHeight, angle, rowOffset);
       if (tileIntersectsPolygon(tile, state.points)) {
-        const center = {
-          x: tile.reduce((sum, point) => sum + point.x, 0) / 4,
-          y: tile.reduce((sum, point) => sum + point.y, 0) / 4,
-        };
-        const full = pointInPolygon(center, state.points) && tile.every((point) => pointInPolygon(point, state.points));
+        const coverageResult = tileCoverage(tile, state.points);
+        const coverage = coverageResult.ratio;
+        if (coverage === 0) continue;
+        const full = coverage >= 0.98;
         if (!full) cut += 1;
-        tiles.push({ points: tile, full });
+        tiles.push({ points: tile, full, coverage, labelPoint: coverageResult.labelPoint });
       }
     }
     row += 1;
   }
 
-  return { tiles, cut };
+  const materialTiles = assignTileNumbers(tiles);
+  return { tiles, cut, materialTiles };
 }
 
 function drawGrid() {
-  const minor = cmToPx(10);
-  const major = cmToPx(50);
+  const visibleStepCm = visibleGridStepCm();
+  const minor = cmToPx(visibleStepCm);
+  const major = minor * 5;
   ctx.lineWidth = 1;
-  for (let x = origin.x % minor; x < canvas.width; x += minor) {
+  for (let x = origin.x % minor; x < state.viewportWidth; x += minor) {
     ctx.strokeStyle = Math.abs((x - origin.x) % major) < 0.01 ? "#d6cfc4" : "#ebe5dc";
     ctx.beginPath();
     ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
+    ctx.lineTo(x, state.viewportHeight);
     ctx.stroke();
   }
-  for (let y = origin.y % minor; y < canvas.height; y += minor) {
+  for (let y = origin.y % minor; y < state.viewportHeight; y += minor) {
     ctx.strokeStyle = Math.abs((y - origin.y) % major) < 0.01 ? "#d6cfc4" : "#ebe5dc";
     ctx.beginPath();
     ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
+    ctx.lineTo(state.viewportWidth, y);
     ctx.stroke();
   }
+
+  ctx.fillStyle = "#8a8177";
+  ctx.font = "12px Inter, system-ui, sans-serif";
+  ctx.fillText(`Видимая сетка: ${formatDrawingLength(visibleStepCm)}`, 14, state.viewportHeight - 18);
+}
+
+function drawSegmentLabels() {
+  if (state.points.length < 2) return;
+  const segmentCount = state.closed ? state.points.length : state.points.length - 1;
+  ctx.font = "12px Inter, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
+  for (let i = 0; i < segmentCount; i += 1) {
+    const start = state.points[i];
+    const end = state.points[(i + 1) % state.points.length];
+    const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+    const angle = Math.atan2(end.y - start.y, end.x - start.x);
+    const normal = { x: -Math.sin(angle), y: Math.cos(angle) };
+    const text = formatDrawingLength(pxToCm(distance(start, end)));
+    const label = {
+      x: mid.x + normal.x * 18,
+      y: mid.y + normal.y * 18,
+    };
+
+    ctx.fillStyle = "rgba(255, 253, 250, 0.90)";
+    const width = ctx.measureText(text).width + 12;
+    ctx.fillRect(label.x - width / 2, label.y - 10, width, 20);
+    ctx.fillStyle = "#4f463d";
+    ctx.fillText(text, label.x, label.y);
+  }
+
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
 function drawPolygon() {
@@ -229,6 +430,7 @@ function drawPolygon() {
     ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
     ctx.fill();
   });
+  drawSegmentLabels();
 }
 
 function drawTiles(tiles) {
@@ -252,25 +454,63 @@ function drawTiles(tiles) {
     ctx.stroke();
   });
   ctx.restore();
+
+  tiles.forEach((tile) => {
+    if (!tile.label) return;
+    const center = tile.labelPoint || tileCenter(tile);
+    const label = tile.label;
+    ctx.font = tile.full ? "700 13px Inter, system-ui, sans-serif" : "700 12px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const width = Math.max(ctx.measureText(label).width + 10, tile.full ? 24 : 30);
+    const height = 20;
+
+    ctx.fillStyle = tile.full ? "rgba(255, 253, 250, 0.92)" : "rgba(255, 244, 236, 0.95)";
+    ctx.strokeStyle = tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    roundedRectPath(center.x - width / 2, center.y - height / 2, width, height, 5);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = tile.full ? "#214f78" : "#9d4525";
+    ctx.fillText(label, center.x, center.y + 0.5);
+  });
+
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
 function updateStats(tileResult) {
   const areaM2 = polygonArea(state.points) / (pxPerCm() ** 2) / 10000;
-  const raw = tileResult.tiles.length;
+  const materialTiles = tileResult.materialTiles || 0;
+  const raw = Math.ceil(materialTiles);
   const waste = Number(controls.waste.value) / 100;
   controls.area.textContent = state.closed ? areaM2.toFixed(2) : "0";
   controls.tilesRaw.textContent = state.closed ? String(raw) : "0";
-  controls.tilesWithWaste.textContent = state.closed ? String(Math.ceil(raw * (1 + waste))) : "0";
+  controls.tilesWithWaste.textContent = state.closed ? String(Math.ceil(materialTiles * (1 + waste))) : "0";
   controls.cutTiles.textContent = state.closed ? String(tileResult.cut) : "0";
 }
 
 function render() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.clearRect(0, 0, state.viewportWidth, state.viewportHeight);
   drawGrid();
   const tileResult = calculateTiles();
   drawTiles(tileResult.tiles);
   drawPolygon();
   updateStats(tileResult);
+}
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(Math.round(rect.width), 1);
+  const height = Math.max(Math.round(rect.height), 1);
+  state.viewportWidth = width;
+  state.viewportHeight = height;
+  canvas.width = Math.round(width * dpr);
+  canvas.height = Math.round(height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  render();
 }
 
 canvas.addEventListener("pointerdown", (event) => {
@@ -283,7 +523,8 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   if (!state.closed) {
-    state.points.push(snapPoint(point));
+    const anchor = state.points[state.points.length - 1] || null;
+    state.points.push(snapDrawingPoint(point, anchor));
     render();
   }
 });
@@ -311,10 +552,19 @@ controls.clearBtn.addEventListener("click", () => {
   render();
 });
 
+controls.drawUnit.addEventListener("change", () => {
+  const currentStepCm = Math.max(Number(controls.gridStep.value) || 1, 0.01) * unitToCm[state.previousDrawUnit];
+  state.previousDrawUnit = drawUnit();
+  const convertedStep = currentStepCm / unitToCm[state.previousDrawUnit];
+  controls.gridStep.value = Number(convertedStep.toFixed(3));
+  render();
+});
+
 Object.values(controls).forEach((control) => {
   if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
     control.addEventListener("input", render);
   }
 });
 
-render();
+new ResizeObserver(resizeCanvas).observe(canvas);
+resizeCanvas();

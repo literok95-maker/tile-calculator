@@ -124,6 +124,13 @@ label {
   font-size: 14px;
 }
 
+.check-row {
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  gap: 10px;
+  line-height: 1.35;
+}
+
 input,
 select {
   width: 100%;
@@ -136,6 +143,12 @@ select {
 }
 
 input[type="range"] {
+  padding: 0;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  min-height: 18px;
   padding: 0;
 }
 
