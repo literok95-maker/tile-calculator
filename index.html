@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Расчет плитки</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace" aria-label="План помещения">
+        <div class="canvas-header">
+          <div>
+            <h1>Расчет плитки на пол</h1>
+            <p>Кликните по сетке, чтобы задать углы помещения. Точки можно перетаскивать.</p>
+          </div>
+          <div class="toolbar" aria-label="Инструменты">
+            <button id="closePolygonBtn" type="button">Замкнуть</button>
+            <button id="clearBtn" type="button">Очистить</button>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="planner" width="1120" height="760" aria-label="Редактор плана"></canvas>
+        </div>
+      </section>
+
+      <aside class="panel" aria-label="Параметры расчета">
+        <section>
+          <h2>Плитка</h2>
+          <label>
+            Ширина, см
+            <input id="tileWidth" type="number" min="1" value="60">
+          </label>
+          <label>
+            Длина, см
+            <input id="tileHeight" type="number" min="1" value="60">
+          </label>
+          <label>
+            Зазор, мм
+            <input id="grout" type="number" min="0" value="2">
+          </label>
+          <label>
+            Запас, %
+            <input id="waste" type="number" min="0" value="10">
+          </label>
+        </section>
+
+        <section>
+          <h2>Раскладка</h2>
+          <label>
+            Тип
+            <select id="layout">
+              <option value="straight">Прямая</option>
+              <option value="brick">Со смещением 1/2</option>
+              <option value="diagonal">Диагональная 45°</option>
+            </select>
+          </label>
+          <label>
+            Поворот, °
+            <input id="rotation" type="number" value="0" step="5">
+          </label>
+          <label>
+            Масштаб
+            <input id="scale" type="range" min="0.6" max="2.2" value="1" step="0.05">
+          </label>
+        </section>
+
+        <section class="stats">
+          <h2>Итог</h2>
+          <dl>
+            <div>
+              <dt>Площадь</dt>
+              <dd><span id="area">0</span> м²</dd>
+            </div>
+            <div>
+              <dt>Плиток по геометрии</dt>
+              <dd><span id="tilesRaw">0</span> шт.</dd>
+            </div>
+            <div>
+              <dt>С запасом</dt>
+              <dd><span id="tilesWithWaste">0</span> шт.</dd>
+            </div>
+            <div>
+              <dt>Обрезки</dt>
+              <dd><span id="cutTiles">0</span> шт.</dd>
+            </div>
+          </dl>
+        </section>
+      </aside>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
