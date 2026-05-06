@@ -29,6 +29,9 @@ const state = {
   ],
   closed: true,
   draggingIndex: -1,
+  drawingSegment: false,
+  draftPoint: null,
+  guides: [],
   previousDrawUnit: "cm",
   viewportWidth: 1120,
   viewportHeight: 760,
@@ -47,6 +50,7 @@ const unitLabels = {
   m: "м",
 };
 const snapAngles = [0, 90];
+const guideSnapPx = 8;
 
 function pxPerCm() {
   return basePixelsPerCm * Math.max(Number(controls.scale.value) || 1, 0.1);
@@ -90,6 +94,38 @@ function snapPoint(point) {
   };
 }
 
+function applyGuides(point, options = {}) {
+  const { excludeIndex = -1 } = options;
+  const guided = { ...point };
+  const guides = [];
+  let nearestX = { distance: Infinity, value: null };
+  let nearestY = { distance: Infinity, value: null };
+
+  state.points.forEach((existing, index) => {
+    if (index === excludeIndex) return;
+    const xDistance = Math.abs(existing.x - point.x);
+    const yDistance = Math.abs(existing.y - point.y);
+    if (xDistance < nearestX.distance) {
+      nearestX = { distance: xDistance, value: existing.x };
+    }
+    if (yDistance < nearestY.distance) {
+      nearestY = { distance: yDistance, value: existing.y };
+    }
+  });
+
+  if (nearestX.value !== null && nearestX.distance <= guideSnapPx) {
+    guided.x = nearestX.value;
+    guides.push({ axis: "x", value: nearestX.value });
+  }
+  if (nearestY.value !== null && nearestY.distance <= guideSnapPx) {
+    guided.y = nearestY.value;
+    guides.push({ axis: "y", value: nearestY.value });
+  }
+
+  state.guides = guides;
+  return guided;
+}
+
 function snapAnglePoint(anchor, rawPoint) {
   if (!controls.angleSnap.checked) return rawPoint;
   const dx = rawPoint.x - anchor.x;
@@ -113,9 +149,10 @@ function snapAnglePoint(anchor, rawPoint) {
 }
 
 function snapDrawingPoint(point, anchor = null) {
-  if (!anchor) return snapPoint(point);
-  if (!controls.angleSnap.checked) return snapPoint(point);
-  const angleSnapped = snapAnglePoint(anchor, point);
+  const guided = applyGuides(point);
+  if (!anchor) return snapPoint(guided);
+  if (!controls.angleSnap.checked || state.guides.length > 0) return snapPoint(guided);
+  const angleSnapped = snapAnglePoint(anchor, guided);
   const length = distance(anchor, angleSnapped);
   const stepPx = cmToPx(drawingStepCm());
   const snappedLength = Math.max(Math.round(length / stepPx) * stepPx, stepPx);
@@ -306,11 +343,11 @@ function assignTileNumbers(tiles) {
         nextSourceNumber += 1;
       }
 
-      bin.fragmentCount += 1;
+      bin.fragmentCount = (bin.fragmentCount || 0) + 1;
       bin.remaining -= tile.coverage;
       tile.sourceNumber = bin.sourceNumber;
       tile.fragmentNumber = bin.fragmentCount;
-      tile.label = `${bin.sourceNumber}.${bin.fragmentNumber}`;
+      tile.label = `${tile.sourceNumber}.${tile.fragmentNumber}`;
     });
 
   return nextSourceNumber - 1;
@@ -382,6 +419,27 @@ function drawGrid() {
   ctx.fillText(`Видимая сетка: ${formatDrawingLength(visibleStepCm)}`, 14, state.viewportHeight - 18);
 }
 
+function drawGuides() {
+  if (state.guides.length === 0) return;
+
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#d97706";
+  state.guides.forEach((guide) => {
+    ctx.beginPath();
+    if (guide.axis === "x") {
+      ctx.moveTo(guide.value, 0);
+      ctx.lineTo(guide.value, state.viewportHeight);
+    } else {
+      ctx.moveTo(0, guide.value);
+      ctx.lineTo(state.viewportWidth, guide.value);
+    }
+    ctx.stroke();
+  });
+  ctx.restore();
+}
+
 function drawSegmentLabels() {
   if (state.points.length < 2) return;
   const segmentCount = state.closed ? state.points.length : state.points.length - 1;
@@ -430,7 +488,28 @@ function drawPolygon() {
     ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
     ctx.fill();
   });
+  drawDraftSegment();
   drawSegmentLabels();
+}
+
+function drawDraftSegment() {
+  if (!state.draftPoint || state.points.length === 0 || state.closed) return;
+  const anchor = state.points[state.points.length - 1];
+
+  ctx.save();
+  ctx.setLineDash([8, 6]);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "#c85f35";
+  ctx.beginPath();
+  ctx.moveTo(anchor.x, anchor.y);
+  ctx.lineTo(state.draftPoint.x, state.draftPoint.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#c85f35";
+  ctx.beginPath();
+  ctx.arc(state.draftPoint.x, state.draftPoint.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawTiles(tiles) {
@@ -496,6 +575,7 @@ function render() {
   drawGrid();
   const tileResult = calculateTiles();
   drawTiles(tileResult.tiles);
+  drawGuides();
   drawPolygon();
   updateStats(tileResult);
 }
@@ -517,27 +597,51 @@ canvas.addEventListener("pointerdown", (event) => {
   const point = pointerPosition(event);
   const nearestIndex = state.points.findIndex((existing) => distance(existing, point) < 12);
   if (nearestIndex >= 0) {
+    state.guides = [];
     state.draggingIndex = nearestIndex;
     canvas.setPointerCapture(event.pointerId);
     render();
     return;
   }
   if (!state.closed) {
-    const anchor = state.points[state.points.length - 1] || null;
-    state.points.push(snapDrawingPoint(point, anchor));
+    if (state.points.length === 0) {
+      state.points.push(snapPoint(point));
+    }
+    const anchor = state.points[state.points.length - 1];
+    state.drawingSegment = true;
+    state.draftPoint = snapDrawingPoint(point, anchor);
+    canvas.setPointerCapture(event.pointerId);
     render();
   }
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (state.drawingSegment) {
+    const anchor = state.points[state.points.length - 1];
+    state.draftPoint = snapDrawingPoint(pointerPosition(event), anchor);
+    render();
+    return;
+  }
   if (state.draggingIndex < 0) return;
-  state.points[state.draggingIndex] = snapPoint(pointerPosition(event));
+  const guidedPoint = applyGuides(pointerPosition(event), { excludeIndex: state.draggingIndex });
+  state.points[state.draggingIndex] = snapPoint(guidedPoint);
   render();
 });
 
 canvas.addEventListener("pointerup", (event) => {
+  if (state.drawingSegment && state.draftPoint) {
+    const anchor = state.points[state.points.length - 1];
+    if (distance(anchor, state.draftPoint) >= cmToPx(drawingStepCm()) / 2) {
+      state.points.push(state.draftPoint);
+    }
+  }
   state.draggingIndex = -1;
-  canvas.releasePointerCapture(event.pointerId);
+  state.drawingSegment = false;
+  state.draftPoint = null;
+  state.guides = [];
+  if (canvas.hasPointerCapture(event.pointerId)) {
+    canvas.releasePointerCapture(event.pointerId);
+  }
   render();
 });
 
