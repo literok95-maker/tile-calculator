@@ -353,6 +353,61 @@ function assignTileNumbers(tiles) {
   return nextSourceNumber - 1;
 }
 
+function collectIntersectingTile(tile, tiles) {
+  if (!tileIntersectsPolygon(tile, state.points)) return 0;
+  const coverageResult = tileCoverage(tile, state.points);
+  const coverage = coverageResult.ratio;
+  if (coverage === 0) return 0;
+  const full = coverage >= 0.98;
+  tiles.push({ points: tile, full, coverage, labelPoint: coverageResult.labelPoint });
+  return full ? 0 : 1;
+}
+
+function herringbonePoint(x, y, angle) {
+  const longUnit = {
+    x: Math.cos(angle),
+    y: Math.sin(angle),
+  };
+  const shortUnit = {
+    x: -Math.sin(angle),
+    y: Math.cos(angle),
+  };
+
+  return {
+    x: origin.x + longUnit.x * x + shortUnit.x * y,
+    y: origin.y + longUnit.y * x + shortUnit.y * y,
+  };
+}
+
+function herringboneTileSet(x0, y0, a, b, angle) {
+  return [
+    [
+      herringbonePoint(x0, y0, angle),
+      herringbonePoint(x0, y0 + a, angle),
+      herringbonePoint(x0 + b, y0 + a, angle),
+      herringbonePoint(x0 + b, y0, angle),
+    ],
+    [
+      herringbonePoint(x0 + a, y0 + a, angle),
+      herringbonePoint(x0, y0 + a, angle),
+      herringbonePoint(x0, y0 + a + b, angle),
+      herringbonePoint(x0 + a, y0 + a + b, angle),
+    ],
+    [
+      herringbonePoint(x0 + a, y0 + a, angle),
+      herringbonePoint(x0 + a, y0 + a + a, angle),
+      herringbonePoint(x0 + b + a, y0 + a + a, angle),
+      herringbonePoint(x0 + b + a, y0 + a, angle),
+    ],
+    [
+      herringbonePoint(x0 + a + a, y0 + a + a, angle),
+      herringbonePoint(x0 + a, y0 + a + a, angle),
+      herringbonePoint(x0 + a, y0 + a + b + a, angle),
+      herringbonePoint(x0 + a + a, y0 + a + b + a, angle),
+    ],
+  ];
+}
+
 function calculateTiles() {
   if (!state.closed || state.points.length < 3) {
     return { tiles: [], cut: 0, materialTiles: 0 };
@@ -373,21 +428,34 @@ function calculateTiles() {
   const startY = Math.floor((bounds.minY - padding) / tileHeight) * tileHeight;
   const endY = bounds.maxY + padding;
 
-  let row = 0;
-  for (let y = startY; y <= endY; y += tileHeight) {
-    const rowOffset = layout === "brick" && row % 2 === 1 ? tileWidth / 2 : 0;
-    for (let x = startX; x <= endX; x += tileWidth) {
-      const tile = tilePolygon(x, y, tileWidth, tileHeight, angle, rowOffset);
-      if (tileIntersectsPolygon(tile, state.points)) {
-        const coverageResult = tileCoverage(tile, state.points);
-        const coverage = coverageResult.ratio;
-        if (coverage === 0) continue;
-        const full = coverage >= 0.98;
-        if (!full) cut += 1;
-        tiles.push({ points: tile, full, coverage, labelPoint: coverageResult.labelPoint });
+  if (layout === "herringbone") {
+    const longSide = Math.max(tileWidth, tileHeight);
+    const shortSide = Math.min(tileWidth, tileHeight);
+    const repeatAlong = shortSide * 2;
+    const repeatAcross = longSide;
+    const herringbonePadding = Math.max(state.viewportWidth, state.viewportHeight) + longSide * 3;
+    const alongCount = Math.ceil(herringbonePadding / repeatAlong) + 4;
+    const acrossCount = Math.ceil(herringbonePadding / repeatAcross) + 4;
+
+    for (let along = -alongCount; along <= alongCount; along += 1) {
+      for (let across = -acrossCount; across <= acrossCount; across += 1) {
+        const x0 = repeatAlong * along + repeatAcross * across;
+        const y0 = repeatAlong * along - repeatAcross * across;
+        herringboneTileSet(x0, y0, shortSide, longSide, baseRotation).forEach((tile) => {
+          cut += collectIntersectingTile(tile, tiles);
+        });
       }
     }
-    row += 1;
+  } else {
+    let row = 0;
+    for (let y = startY; y <= endY; y += tileHeight) {
+      const rowOffset = layout === "brick" && row % 2 === 1 ? tileWidth / 2 : 0;
+      for (let x = startX; x <= endX; x += tileWidth) {
+        const tile = tilePolygon(x, y, tileWidth, tileHeight, angle, rowOffset);
+        cut += collectIntersectingTile(tile, tiles);
+      }
+      row += 1;
+    }
   }
 
   const materialTiles = assignTileNumbers(tiles);
