@@ -92,6 +92,12 @@ button:hover {
   background: #f7f2eb;
 }
 
+button[aria-pressed="true"] {
+  border-color: #2f6f62;
+  background: #e8f3ef;
+  color: #1f4f45;
+}
+
 .canvas-wrap {
   min-height: 0;
   padding: 12px;

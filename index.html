@@ -15,7 +15,10 @@
             <p>Кликните по сетке, чтобы задать углы помещения. Новые сегменты привязываются к горизонтали и вертикали.</p>
           </div>
           <div class="toolbar" aria-label="Инструменты">
+            <button id="toggleSnapBtn" type="button" aria-pressed="true">Привязка: вкл</button>
+            <button id="toggleGuidesBtn" type="button" aria-pressed="true">Гайды: вкл</button>
             <button id="closePolygonBtn" type="button">Замкнуть</button>
+            <button id="removeLastPointBtn" type="button">Удалить последнюю</button>
             <button id="clearBtn" type="button">Очистить</button>
           </div>
         </div>
@@ -43,17 +46,21 @@
             <input id="angleSnap" type="checkbox" checked>
             Привязка новых сегментов к 0/90°
           </label>
+          <label class="check-row">
+            <input id="showGuides" type="checkbox" checked>
+            Показывать гайдлайны
+          </label>
         </section>
 
         <section>
           <h2>Плитка</h2>
           <label>
-            Ширина, см
-            <input id="tileWidth" type="number" min="1" value="60">
+            Ширина, мм
+            <input id="tileWidth" type="number" min="1" value="600">
           </label>
           <label>
-            Длина, см
-            <input id="tileHeight" type="number" min="1" value="60">
+            Длина, мм
+            <input id="tileHeight" type="number" min="1" value="600">
           </label>
           <label>
             Зазор, мм
@@ -81,8 +88,24 @@
             <input id="rotation" type="number" value="0" step="5">
           </label>
           <label>
+            Смещение X, см
+            <input id="layoutOffsetX" type="range" min="-200" max="200" value="0" step="1">
+          </label>
+          <label>
+            Смещение Y, см
+            <input id="layoutOffsetY" type="range" min="-200" max="200" value="0" step="1">
+          </label>
+          <label>
             Масштаб, x
             <input id="scale" type="number" min="0.25" max="4" value="1" step="0.05">
+          </label>
+          <label class="check-row">
+            <input id="showTileNumbers" type="checkbox" checked>
+            Показывать номера плиток
+          </label>
+          <label class="check-row">
+            <input id="highlightFullTiles" type="checkbox" checked>
+            Подсвечивать целые плитки
           </label>
         </section>
 

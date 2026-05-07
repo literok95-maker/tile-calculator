@@ -5,18 +5,26 @@ const controls = {
   drawUnit: document.querySelector("#drawUnit"),
   gridStep: document.querySelector("#gridStep"),
   angleSnap: document.querySelector("#angleSnap"),
+  showGuides: document.querySelector("#showGuides"),
   tileWidth: document.querySelector("#tileWidth"),
   tileHeight: document.querySelector("#tileHeight"),
   grout: document.querySelector("#grout"),
   waste: document.querySelector("#waste"),
   layout: document.querySelector("#layout"),
   rotation: document.querySelector("#rotation"),
+  layoutOffsetX: document.querySelector("#layoutOffsetX"),
+  layoutOffsetY: document.querySelector("#layoutOffsetY"),
   scale: document.querySelector("#scale"),
+  showTileNumbers: document.querySelector("#showTileNumbers"),
+  highlightFullTiles: document.querySelector("#highlightFullTiles"),
   area: document.querySelector("#area"),
   tilesRaw: document.querySelector("#tilesRaw"),
   tilesWithWaste: document.querySelector("#tilesWithWaste"),
   cutTiles: document.querySelector("#cutTiles"),
+  toggleSnapBtn: document.querySelector("#toggleSnapBtn"),
+  toggleGuidesBtn: document.querySelector("#toggleGuidesBtn"),
   closePolygonBtn: document.querySelector("#closePolygonBtn"),
+  removeLastPointBtn: document.querySelector("#removeLastPointBtn"),
   clearBtn: document.querySelector("#clearBtn"),
 };
 
@@ -29,12 +37,21 @@ const state = {
   ],
   closed: true,
   draggingIndex: -1,
+  dragSnapshot: null,
   drawingSegment: false,
   draftPoint: null,
   guides: [],
   previousDrawUnit: "cm",
   viewportWidth: 1120,
   viewportHeight: 760,
+  pixelRatio: 1,
+  viewZoom: 1,
+  viewPanX: 0,
+  viewPanY: 0,
+  panning: false,
+  lastPanPoint: null,
+  undoStack: [],
+  redoStack: [],
 };
 
 const basePixelsPerCm = 2;
@@ -51,6 +68,8 @@ const unitLabels = {
 };
 const snapAngles = [0, 90];
 const guideSnapPx = 8;
+const storageKey = "tile-calculator-state-v1";
+let isRestoringState = false;
 
 function pxPerCm() {
   return basePixelsPerCm * Math.max(Number(controls.scale.value) || 1, 0.1);
@@ -74,7 +93,7 @@ function drawingStepCm() {
 
 function visibleGridStepCm() {
   let stepCm = drawingStepCm();
-  while (cmToPx(stepCm) < 8) {
+  while (cmToPx(stepCm) * state.viewZoom < 8) {
     stepCm *= 2;
   }
   return stepCm;
@@ -94,7 +113,170 @@ function snapPoint(point) {
   };
 }
 
+function geometrySnapshot() {
+  return {
+    points: state.points.map((point) => ({ ...point })),
+    closed: state.closed,
+  };
+}
+
+function restoreGeometry(snapshot) {
+  state.points = snapshot.points.map((point) => ({ ...point }));
+  state.closed = snapshot.closed;
+  state.draggingIndex = -1;
+  state.dragSnapshot = null;
+  state.drawingSegment = false;
+  state.draftPoint = null;
+  state.guides = [];
+}
+
+function serializeAppState() {
+  return {
+    geometry: geometrySnapshot(),
+    controls: {
+      drawUnit: controls.drawUnit.value,
+      gridStep: controls.gridStep.value,
+      angleSnap: controls.angleSnap.checked,
+      showGuides: controls.showGuides.checked,
+      tileWidth: controls.tileWidth.value,
+      tileHeight: controls.tileHeight.value,
+      grout: controls.grout.value,
+      waste: controls.waste.value,
+      layout: controls.layout.value,
+      rotation: controls.rotation.value,
+      layoutOffsetX: controls.layoutOffsetX.value,
+      layoutOffsetY: controls.layoutOffsetY.value,
+      scale: controls.scale.value,
+      showTileNumbers: controls.showTileNumbers.checked,
+      highlightFullTiles: controls.highlightFullTiles.checked,
+    },
+    view: {
+      zoom: state.viewZoom,
+      panX: state.viewPanX,
+      panY: state.viewPanY,
+    },
+  };
+}
+
+function saveAppState() {
+  if (isRestoringState) return;
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(serializeAppState()));
+  } catch (error) {
+    // Storage can be unavailable in restricted browser modes.
+  }
+}
+
+function restoreAppState() {
+  let rawState = null;
+  try {
+    rawState = localStorage.getItem(storageKey);
+  } catch (error) {
+    return;
+  }
+  if (!rawState) return;
+
+  try {
+    isRestoringState = true;
+    const savedState = JSON.parse(rawState);
+    if (savedState.geometry?.points?.length >= 0) {
+      restoreGeometry(savedState.geometry);
+    }
+
+    Object.entries(savedState.controls || {}).forEach(([key, value]) => {
+      const control = controls[key];
+      if (!control) return;
+      const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
+        ? Number(value) * 10
+        : value;
+      if (control instanceof HTMLInputElement && control.type === "checkbox") {
+        control.checked = Boolean(migratedValue);
+      } else if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
+        control.value = String(migratedValue);
+      }
+    });
+
+    state.previousDrawUnit = drawUnit();
+    state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
+    state.viewPanX = Number(savedState.view?.panX) || 0;
+    state.viewPanY = Number(savedState.view?.panY) || 0;
+    state.undoStack = [];
+    state.redoStack = [];
+  } catch (error) {
+    try {
+      localStorage.removeItem(storageKey);
+    } catch (removeError) {
+      // Ignore storage cleanup failures.
+    }
+  } finally {
+    isRestoringState = false;
+  }
+}
+
+function snapshotsEqual(a, b) {
+  if (!a || !b || a.closed !== b.closed || a.points.length !== b.points.length) return false;
+  return a.points.every((point, index) => point.x === b.points[index].x && point.y === b.points[index].y);
+}
+
+function pushUndo(beforeSnapshot) {
+  const afterSnapshot = geometrySnapshot();
+  if (snapshotsEqual(beforeSnapshot, afterSnapshot)) return;
+  state.undoStack.push(beforeSnapshot);
+  state.redoStack = [];
+}
+
+function undo() {
+  if (state.undoStack.length === 0) return;
+  const current = geometrySnapshot();
+  const previous = state.undoStack.pop();
+  state.redoStack.push(current);
+  restoreGeometry(previous);
+  render();
+}
+
+function redo() {
+  if (state.redoStack.length === 0) return;
+  const current = geometrySnapshot();
+  const next = state.redoStack.pop();
+  state.undoStack.push(current);
+  restoreGeometry(next);
+  render();
+}
+
+function syncSnapToggle() {
+  controls.toggleSnapBtn.textContent = controls.angleSnap.checked ? "Привязка: вкл" : "Привязка: выкл";
+  controls.toggleSnapBtn.setAttribute("aria-pressed", String(controls.angleSnap.checked));
+}
+
+function syncGuidesToggle() {
+  controls.toggleGuidesBtn.textContent = controls.showGuides.checked ? "Гайды: вкл" : "Гайды: выкл";
+  controls.toggleGuidesBtn.setAttribute("aria-pressed", String(controls.showGuides.checked));
+  if (!controls.showGuides.checked) {
+    state.guides = [];
+  }
+}
+
+function screenToWorld(point) {
+  return {
+    x: (point.x - state.viewPanX) / state.viewZoom,
+    y: (point.y - state.viewPanY) / state.viewZoom,
+  };
+}
+
+function screenPointerPosition(event) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: event.clientX - rect.left,
+    y: event.clientY - rect.top,
+  };
+}
+
 function applyGuides(point, options = {}) {
+  if (!controls.showGuides.checked) {
+    state.guides = [];
+    return point;
+  }
+
   const { excludeIndex = -1 } = options;
   const guided = { ...point };
   const guides = [];
@@ -113,11 +295,12 @@ function applyGuides(point, options = {}) {
     }
   });
 
-  if (nearestX.value !== null && nearestX.distance <= guideSnapPx) {
+  const guideThreshold = guideSnapPx / state.viewZoom;
+  if (nearestX.value !== null && nearestX.distance <= guideThreshold) {
     guided.x = nearestX.value;
     guides.push({ axis: "x", value: nearestX.value });
   }
-  if (nearestY.value !== null && nearestY.distance <= guideSnapPx) {
+  if (nearestY.value !== null && nearestY.distance <= guideThreshold) {
     guided.y = nearestY.value;
     guides.push({ axis: "y", value: nearestY.value });
   }
@@ -164,15 +347,54 @@ function snapDrawingPoint(point, anchor = null) {
 }
 
 function pointerPosition(event) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    x: event.clientX - rect.left,
-    y: event.clientY - rect.top,
-  };
+  return screenToWorld(screenPointerPosition(event));
 }
 
 function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function closestPointOnSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) {
+    return { point: start, distance: distance(point, start), t: 0 };
+  }
+
+  const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared));
+  const projected = {
+    x: start.x + dx * t,
+    y: start.y + dy * t,
+  };
+  return {
+    point: projected,
+    distance: distance(point, projected),
+    t,
+  };
+}
+
+function segmentAtPoint(point) {
+  if (state.points.length < 2) return null;
+  const segmentCount = state.closed ? state.points.length : state.points.length - 1;
+  const hitThreshold = 10 / state.viewZoom;
+  let best = null;
+
+  for (let i = 0; i < segmentCount; i += 1) {
+    const start = state.points[i];
+    const end = state.points[(i + 1) % state.points.length];
+    const candidate = closestPointOnSegment(point, start, end);
+    if (candidate.t <= 0.03 || candidate.t >= 0.97) continue;
+    if (candidate.distance <= hitThreshold && (!best || candidate.distance < best.distance)) {
+      best = {
+        insertIndex: i + 1,
+        point: candidate.point,
+        distance: candidate.distance,
+      };
+    }
+  }
+
+  return best;
 }
 
 function polygonArea(points) {
@@ -363,7 +585,7 @@ function collectIntersectingTile(tile, tiles) {
   return full ? 0 : 1;
 }
 
-function herringbonePoint(x, y, angle) {
+function herringbonePoint(x, y, angle, offsetX = 0, offsetY = 0) {
   const longUnit = {
     x: Math.cos(angle),
     y: Math.sin(angle),
@@ -374,36 +596,36 @@ function herringbonePoint(x, y, angle) {
   };
 
   return {
-    x: origin.x + longUnit.x * x + shortUnit.x * y,
-    y: origin.y + longUnit.y * x + shortUnit.y * y,
+    x: origin.x + offsetX + longUnit.x * x + shortUnit.x * y,
+    y: origin.y + offsetY + longUnit.y * x + shortUnit.y * y,
   };
 }
 
-function herringboneTileSet(x0, y0, a, b, angle) {
+function herringboneTileSet(x0, y0, a, b, angle, offsetX = 0, offsetY = 0) {
   return [
     [
-      herringbonePoint(x0, y0, angle),
-      herringbonePoint(x0, y0 + a, angle),
-      herringbonePoint(x0 + b, y0 + a, angle),
-      herringbonePoint(x0 + b, y0, angle),
+      herringbonePoint(x0, y0, angle, offsetX, offsetY),
+      herringbonePoint(x0, y0 + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + b, y0 + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + b, y0, angle, offsetX, offsetY),
     ],
     [
-      herringbonePoint(x0 + a, y0 + a, angle),
-      herringbonePoint(x0, y0 + a, angle),
-      herringbonePoint(x0, y0 + a + b, angle),
-      herringbonePoint(x0 + a, y0 + a + b, angle),
+      herringbonePoint(x0 + a, y0 + a, angle, offsetX, offsetY),
+      herringbonePoint(x0, y0 + a, angle, offsetX, offsetY),
+      herringbonePoint(x0, y0 + a + b, angle, offsetX, offsetY),
+      herringbonePoint(x0 + a, y0 + a + b, angle, offsetX, offsetY),
     ],
     [
-      herringbonePoint(x0 + a, y0 + a, angle),
-      herringbonePoint(x0 + a, y0 + a + a, angle),
-      herringbonePoint(x0 + b + a, y0 + a + a, angle),
-      herringbonePoint(x0 + b + a, y0 + a, angle),
+      herringbonePoint(x0 + a, y0 + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + a, y0 + a + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + b + a, y0 + a + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + b + a, y0 + a, angle, offsetX, offsetY),
     ],
     [
-      herringbonePoint(x0 + a + a, y0 + a + a, angle),
-      herringbonePoint(x0 + a, y0 + a + a, angle),
-      herringbonePoint(x0 + a, y0 + a + b + a, angle),
-      herringbonePoint(x0 + a + a, y0 + a + b + a, angle),
+      herringbonePoint(x0 + a + a, y0 + a + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + a, y0 + a + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + a, y0 + a + b + a, angle, offsetX, offsetY),
+      herringbonePoint(x0 + a + a, y0 + a + b + a, angle, offsetX, offsetY),
     ],
   ];
 }
@@ -413,11 +635,13 @@ function calculateTiles() {
     return { tiles: [], cut: 0, materialTiles: 0 };
   }
 
-  const tileWidth = cmToPx(Number(controls.tileWidth.value) + Number(controls.grout.value) / 10);
-  const tileHeight = cmToPx(Number(controls.tileHeight.value) + Number(controls.grout.value) / 10);
+  const tileWidth = cmToPx((Number(controls.tileWidth.value) + Number(controls.grout.value)) / 10);
+  const tileHeight = cmToPx((Number(controls.tileHeight.value) + Number(controls.grout.value)) / 10);
   const layout = controls.layout.value;
   const baseRotation = Number(controls.rotation.value) * (Math.PI / 180);
   const angle = baseRotation + (layout === "diagonal" ? Math.PI / 4 : 0);
+  const layoutOffsetX = cmToPx(Number(controls.layoutOffsetX.value) || 0);
+  const layoutOffsetY = cmToPx(Number(controls.layoutOffsetY.value) || 0);
   const bounds = boundsFor(state.points);
   const padding = Math.max(tileWidth, tileHeight) * 3;
   const tiles = [];
@@ -441,7 +665,7 @@ function calculateTiles() {
       for (let across = -acrossCount; across <= acrossCount; across += 1) {
         const x0 = repeatAlong * along + repeatAcross * across;
         const y0 = repeatAlong * along - repeatAcross * across;
-        herringboneTileSet(x0, y0, shortSide, longSide, baseRotation).forEach((tile) => {
+        herringboneTileSet(x0, y0, shortSide, longSide, baseRotation, layoutOffsetX, layoutOffsetY).forEach((tile) => {
           cut += collectIntersectingTile(tile, tiles);
         });
       }
@@ -451,7 +675,7 @@ function calculateTiles() {
     for (let y = startY; y <= endY; y += tileHeight) {
       const rowOffset = layout === "brick" && row % 2 === 1 ? tileWidth / 2 : 0;
       for (let x = startX; x <= endX; x += tileWidth) {
-        const tile = tilePolygon(x, y, tileWidth, tileHeight, angle, rowOffset);
+        const tile = tilePolygon(x + layoutOffsetX, y + layoutOffsetY, tileWidth, tileHeight, angle, rowOffset);
         cut += collectIntersectingTile(tile, tiles);
       }
       row += 1;
@@ -462,33 +686,58 @@ function calculateTiles() {
   return { tiles, cut, materialTiles };
 }
 
+function visibleWorldBounds() {
+  const topLeft = screenToWorld({ x: 0, y: 0 });
+  const bottomRight = screenToWorld({ x: state.viewportWidth, y: state.viewportHeight });
+  return {
+    minX: Math.min(topLeft.x, bottomRight.x),
+    minY: Math.min(topLeft.y, bottomRight.y),
+    maxX: Math.max(topLeft.x, bottomRight.x),
+    maxY: Math.max(topLeft.y, bottomRight.y),
+  };
+}
+
 function drawGrid() {
   const visibleStepCm = visibleGridStepCm();
   const minor = cmToPx(visibleStepCm);
   const major = minor * 5;
+  const bounds = visibleWorldBounds();
+  const startX = Math.floor((bounds.minX - origin.x) / minor) * minor + origin.x;
+  const endX = bounds.maxX;
+  const startY = Math.floor((bounds.minY - origin.y) / minor) * minor + origin.y;
+  const endY = bounds.maxY;
+
   ctx.lineWidth = 1;
-  for (let x = origin.x % minor; x < state.viewportWidth; x += minor) {
+  for (let x = startX; x < endX; x += minor) {
     ctx.strokeStyle = Math.abs((x - origin.x) % major) < 0.01 ? "#d6cfc4" : "#ebe5dc";
     ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, state.viewportHeight);
+    ctx.moveTo(x, bounds.minY);
+    ctx.lineTo(x, bounds.maxY);
     ctx.stroke();
   }
-  for (let y = origin.y % minor; y < state.viewportHeight; y += minor) {
+  for (let y = startY; y < endY; y += minor) {
     ctx.strokeStyle = Math.abs((y - origin.y) % major) < 0.01 ? "#d6cfc4" : "#ebe5dc";
     ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(state.viewportWidth, y);
+    ctx.moveTo(bounds.minX, y);
+    ctx.lineTo(bounds.maxX, y);
     ctx.stroke();
   }
+}
 
+function drawGridScaleLabel() {
+  const visibleStepCm = visibleGridStepCm();
   ctx.fillStyle = "#8a8177";
   ctx.font = "12px Inter, system-ui, sans-serif";
-  ctx.fillText(`Видимая сетка: ${formatDrawingLength(visibleStepCm)}`, 14, state.viewportHeight - 18);
+  ctx.fillText(
+    `Видимая сетка: ${formatDrawingLength(visibleStepCm)} · Зум: ${Math.round(state.viewZoom * 100)}%`,
+    14,
+    state.viewportHeight - 18,
+  );
 }
 
 function drawGuides() {
-  if (state.guides.length === 0) return;
+  if (!controls.showGuides.checked || state.guides.length === 0) return;
+  const bounds = visibleWorldBounds();
 
   ctx.save();
   ctx.setLineDash([5, 5]);
@@ -497,11 +746,11 @@ function drawGuides() {
   state.guides.forEach((guide) => {
     ctx.beginPath();
     if (guide.axis === "x") {
-      ctx.moveTo(guide.value, 0);
-      ctx.lineTo(guide.value, state.viewportHeight);
+      ctx.moveTo(guide.value, bounds.minY);
+      ctx.lineTo(guide.value, bounds.maxY);
     } else {
-      ctx.moveTo(0, guide.value);
-      ctx.lineTo(state.viewportWidth, guide.value);
+      ctx.moveTo(bounds.minX, guide.value);
+      ctx.lineTo(bounds.maxX, guide.value);
     }
     ctx.stroke();
   });
@@ -582,6 +831,7 @@ function drawDraftSegment() {
 
 function drawTiles(tiles) {
   if (!state.closed) return;
+  const highlightFullTiles = controls.highlightFullTiles.checked;
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(state.points[0].x, state.points[0].y);
@@ -594,34 +844,46 @@ function drawTiles(tiles) {
     ctx.moveTo(tile.points[0].x, tile.points[0].y);
     tile.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
     ctx.closePath();
-    ctx.fillStyle = tile.full ? "rgba(77, 132, 184, 0.22)" : "rgba(200, 95, 53, 0.24)";
-    ctx.strokeStyle = tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)";
+    ctx.fillStyle = highlightFullTiles
+      ? (tile.full ? "rgba(77, 132, 184, 0.22)" : "rgba(200, 95, 53, 0.24)")
+      : "rgba(77, 132, 184, 0.22)";
+    ctx.strokeStyle = highlightFullTiles
+      ? (tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)")
+      : "rgba(39, 97, 147, 0.65)";
     ctx.lineWidth = 1;
     ctx.fill();
     ctx.stroke();
   });
   ctx.restore();
 
-  tiles.forEach((tile) => {
-    if (!tile.label) return;
-    const center = tile.labelPoint || tileCenter(tile);
-    const label = tile.label;
-    ctx.font = tile.full ? "700 13px Inter, system-ui, sans-serif" : "700 12px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const width = Math.max(ctx.measureText(label).width + 10, tile.full ? 24 : 30);
-    const height = 20;
+  if (controls.showTileNumbers.checked) {
+    tiles.forEach((tile) => {
+      if (!tile.label) return;
+      const center = tile.labelPoint || tileCenter(tile);
+      const label = tile.label;
+      ctx.font = tile.full ? "700 13px Inter, system-ui, sans-serif" : "700 12px Inter, system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const width = Math.max(ctx.measureText(label).width + 10, tile.full ? 24 : 30);
+      const height = 20;
 
-    ctx.fillStyle = tile.full ? "rgba(255, 253, 250, 0.92)" : "rgba(255, 244, 236, 0.95)";
-    ctx.strokeStyle = tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    roundedRectPath(center.x - width / 2, center.y - height / 2, width, height, 5);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = tile.full ? "#214f78" : "#9d4525";
-    ctx.fillText(label, center.x, center.y + 0.5);
-  });
+      ctx.fillStyle = highlightFullTiles
+        ? (tile.full ? "rgba(255, 253, 250, 0.92)" : "rgba(255, 244, 236, 0.95)")
+        : "rgba(255, 253, 250, 0.92)";
+      ctx.strokeStyle = highlightFullTiles
+        ? (tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)")
+        : "rgba(39, 97, 147, 0.65)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      roundedRectPath(center.x - width / 2, center.y - height / 2, width, height, 5);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = highlightFullTiles
+        ? (tile.full ? "#214f78" : "#9d4525")
+        : "#214f78";
+      ctx.fillText(label, center.x, center.y + 0.5);
+    });
+  }
 
   ctx.textAlign = "start";
   ctx.textBaseline = "alphabetic";
@@ -639,13 +901,20 @@ function updateStats(tileResult) {
 }
 
 function render() {
+  ctx.setTransform(state.pixelRatio, 0, 0, state.pixelRatio, 0, 0);
   ctx.clearRect(0, 0, state.viewportWidth, state.viewportHeight);
+  ctx.save();
+  ctx.translate(state.viewPanX, state.viewPanY);
+  ctx.scale(state.viewZoom, state.viewZoom);
   drawGrid();
   const tileResult = calculateTiles();
   drawTiles(tileResult.tiles);
   drawGuides();
   drawPolygon();
+  ctx.restore();
+  drawGridScaleLabel();
   updateStats(tileResult);
+  saveAppState();
 }
 
 function resizeCanvas() {
@@ -655,25 +924,46 @@ function resizeCanvas() {
   const height = Math.max(Math.round(rect.height), 1);
   state.viewportWidth = width;
   state.viewportHeight = height;
+  state.pixelRatio = dpr;
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   render();
 }
 
 canvas.addEventListener("pointerdown", (event) => {
-  const point = pointerPosition(event);
-  const nearestIndex = state.points.findIndex((existing) => distance(existing, point) < 12);
-  if (nearestIndex >= 0) {
-    state.guides = [];
-    state.draggingIndex = nearestIndex;
+  if (event.button === 1) {
+    event.preventDefault();
+    state.panning = true;
+    state.lastPanPoint = screenPointerPosition(event);
     canvas.setPointerCapture(event.pointerId);
     render();
     return;
   }
+
+  const point = pointerPosition(event);
+  const nearestIndex = state.points.findIndex((existing) => distance(existing, point) < 12 / state.viewZoom);
+  if (nearestIndex >= 0) {
+    state.guides = [];
+    state.draggingIndex = nearestIndex;
+    state.dragSnapshot = geometrySnapshot();
+    canvas.setPointerCapture(event.pointerId);
+    render();
+    return;
+  }
+  const segmentHit = segmentAtPoint(point);
+  if (segmentHit) {
+    const beforeSnapshot = geometrySnapshot();
+    state.points.splice(segmentHit.insertIndex, 0, snapPoint(segmentHit.point));
+    pushUndo(beforeSnapshot);
+    state.guides = [];
+    render();
+    return;
+  }
   if (!state.closed) {
+    const beforeSnapshot = geometrySnapshot();
     if (state.points.length === 0) {
       state.points.push(snapPoint(point));
+      pushUndo(beforeSnapshot);
     }
     const anchor = state.points[state.points.length - 1];
     state.drawingSegment = true;
@@ -684,6 +974,15 @@ canvas.addEventListener("pointerdown", (event) => {
 });
 
 canvas.addEventListener("pointermove", (event) => {
+  if (state.panning && state.lastPanPoint) {
+    const current = screenPointerPosition(event);
+    state.viewPanX += current.x - state.lastPanPoint.x;
+    state.viewPanY += current.y - state.lastPanPoint.y;
+    state.lastPanPoint = current;
+    render();
+    return;
+  }
+
   if (state.drawingSegment) {
     const anchor = state.points[state.points.length - 1];
     state.draftPoint = snapDrawingPoint(pointerPosition(event), anchor);
@@ -700,27 +999,110 @@ canvas.addEventListener("pointerup", (event) => {
   if (state.drawingSegment && state.draftPoint) {
     const anchor = state.points[state.points.length - 1];
     if (distance(anchor, state.draftPoint) >= cmToPx(drawingStepCm()) / 2) {
+      const beforeSnapshot = geometrySnapshot();
       state.points.push(state.draftPoint);
+      pushUndo(beforeSnapshot);
     }
   }
+  if (state.draggingIndex >= 0 && state.dragSnapshot) {
+    pushUndo(state.dragSnapshot);
+  }
   state.draggingIndex = -1;
+  state.dragSnapshot = null;
   state.drawingSegment = false;
   state.draftPoint = null;
   state.guides = [];
+  state.panning = false;
+  state.lastPanPoint = null;
   if (canvas.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId);
   }
   render();
 });
 
+canvas.addEventListener("wheel", (event) => {
+  event.preventDefault();
+  const screenPoint = screenPointerPosition(event);
+  const worldPoint = screenToWorld(screenPoint);
+  const zoomFactor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+  const nextZoom = Math.min(Math.max(state.viewZoom * zoomFactor, 0.25), 6);
+
+  state.viewZoom = nextZoom;
+  state.viewPanX = screenPoint.x - worldPoint.x * nextZoom;
+  state.viewPanY = screenPoint.y - worldPoint.y * nextZoom;
+  render();
+}, { passive: false });
+
+canvas.addEventListener("auxclick", (event) => {
+  if (event.button === 1) {
+    event.preventDefault();
+  }
+});
+
+window.addEventListener("keydown", (event) => {
+  const key = event.key.toLowerCase();
+  if ((event.ctrlKey || event.metaKey) && key === "z") {
+    event.preventDefault();
+    if (event.shiftKey) {
+      redo();
+    } else {
+      undo();
+    }
+  }
+  if ((event.ctrlKey || event.metaKey) && key === "y") {
+    event.preventDefault();
+    redo();
+  }
+});
+
+controls.toggleSnapBtn.addEventListener("click", () => {
+  controls.angleSnap.checked = !controls.angleSnap.checked;
+  syncSnapToggle();
+  render();
+});
+
+controls.angleSnap.addEventListener("input", syncSnapToggle);
+
+controls.toggleGuidesBtn.addEventListener("click", () => {
+  controls.showGuides.checked = !controls.showGuides.checked;
+  syncGuidesToggle();
+  render();
+});
+
+controls.showGuides.addEventListener("input", () => {
+  syncGuidesToggle();
+  render();
+});
+
 controls.closePolygonBtn.addEventListener("click", () => {
-  if (state.points.length >= 3) state.closed = true;
+  if (state.points.length >= 3) {
+    const beforeSnapshot = geometrySnapshot();
+    state.closed = true;
+    pushUndo(beforeSnapshot);
+  }
+  render();
+});
+
+controls.removeLastPointBtn.addEventListener("click", () => {
+  const beforeSnapshot = geometrySnapshot();
+  state.points.pop();
+  if (state.points.length < 3) {
+    state.closed = false;
+  }
+  pushUndo(beforeSnapshot);
+  state.draggingIndex = -1;
+  state.dragSnapshot = null;
+  state.drawingSegment = false;
+  state.draftPoint = null;
+  state.guides = [];
   render();
 });
 
 controls.clearBtn.addEventListener("click", () => {
+  const beforeSnapshot = geometrySnapshot();
   state.points = [];
   state.closed = false;
+  pushUndo(beforeSnapshot);
   render();
 });
 
@@ -738,5 +1120,8 @@ Object.values(controls).forEach((control) => {
   }
 });
 
+restoreAppState();
+syncSnapToggle();
+syncGuidesToggle();
 new ResizeObserver(resizeCanvas).observe(canvas);
 resizeCanvas();
