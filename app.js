@@ -23,6 +23,9 @@ const controls = {
   snapModeMenu: document.querySelector("#snapModeMenu"),
   closePolygonBtn: document.querySelector("#closePolygonBtn"),
   removeLastPointBtn: document.querySelector("#removeLastPointBtn"),
+  exportBtn: document.querySelector("#exportBtn"),
+  importBtn: document.querySelector("#importBtn"),
+  importFile: document.querySelector("#importFile"),
   clearBtn: document.querySelector("#clearBtn"),
 };
 
@@ -67,6 +70,7 @@ const unitLabels = {
 };
 const guideSnapPx = 8;
 const storageKey = "tile-calculator-state-v1";
+const exportFormat = "tile-calculator-project";
 let isRestoringState = false;
 
 function pxPerCm() {
@@ -136,6 +140,8 @@ function restoreGeometry(snapshot) {
 
 function serializeAppState() {
   return {
+    format: exportFormat,
+    version: 1,
     geometry: geometrySnapshot(),
     controls: {
       drawUnit: controls.drawUnit.value,
@@ -161,6 +167,49 @@ function serializeAppState() {
   };
 }
 
+function applyAppState(savedState) {
+  if (!savedState || typeof savedState !== "object") {
+    throw new Error("Invalid project file");
+  }
+  if (!savedState.geometry || !Array.isArray(savedState.geometry.points)) {
+    throw new Error("Project file does not contain geometry");
+  }
+
+  restoreGeometry(savedState.geometry);
+
+  Object.entries(savedState.controls || {}).forEach(([key, value]) => {
+    if (key === "snapMode") return;
+    const control = controls[key];
+    if (!control) return;
+    const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
+      ? Number(value) * 10
+      : value;
+    if (control instanceof HTMLInputElement && control.type === "checkbox") {
+      control.checked = Boolean(migratedValue);
+    } else if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
+      control.value = String(migratedValue);
+    }
+  });
+
+  if (["grid", "guides", "grid-guides", "none"].includes(savedState.controls?.snapMode)) {
+    state.snapMode = savedState.controls.snapMode;
+  } else if (savedState.controls?.showGuides) {
+    state.snapMode = "guides";
+  } else if (savedState.controls?.angleSnap === false) {
+    state.snapMode = "none";
+  } else {
+    state.snapMode = "grid";
+  }
+
+  state.previousDrawUnit = drawUnit();
+  state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
+  state.viewPanX = Number(savedState.view?.panX) || 0;
+  state.viewPanY = Number(savedState.view?.panY) || 0;
+  state.undoStack = [];
+  state.redoStack = [];
+  syncSnapModeMenu();
+}
+
 function saveAppState() {
   if (isRestoringState) return;
   try {
@@ -182,38 +231,7 @@ function restoreAppState() {
   try {
     isRestoringState = true;
     const savedState = JSON.parse(rawState);
-    if (savedState.geometry?.points?.length >= 0) {
-      restoreGeometry(savedState.geometry);
-    }
-
-    Object.entries(savedState.controls || {}).forEach(([key, value]) => {
-      if (key === "snapMode") return;
-      const control = controls[key];
-      if (!control) return;
-      const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
-        ? Number(value) * 10
-        : value;
-      if (control instanceof HTMLInputElement && control.type === "checkbox") {
-        control.checked = Boolean(migratedValue);
-      } else if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
-        control.value = String(migratedValue);
-      }
-    });
-
-    if (["grid", "guides", "grid-guides", "none"].includes(savedState.controls?.snapMode)) {
-      state.snapMode = savedState.controls.snapMode;
-    } else if (savedState.controls?.showGuides) {
-      state.snapMode = "guides";
-    } else if (savedState.controls?.angleSnap === false) {
-      state.snapMode = "none";
-    }
-
-    state.previousDrawUnit = drawUnit();
-    state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
-    state.viewPanX = Number(savedState.view?.panX) || 0;
-    state.viewPanY = Number(savedState.view?.panY) || 0;
-    state.undoStack = [];
-    state.redoStack = [];
+    applyAppState(savedState);
   } catch (error) {
     try {
       localStorage.removeItem(storageKey);
@@ -1081,6 +1099,37 @@ controls.removeLastPointBtn.addEventListener("click", () => {
   state.draftPoint = null;
   state.guides = [];
   render();
+});
+
+controls.exportBtn.addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(serializeAppState(), null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  const date = new Date().toISOString().slice(0, 10);
+  link.href = URL.createObjectURL(blob);
+  link.download = `tile-plan-${date}.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+});
+
+controls.importBtn.addEventListener("click", () => {
+  controls.importFile.click();
+});
+
+controls.importFile.addEventListener("change", async () => {
+  const file = controls.importFile.files?.[0];
+  if (!file) return;
+
+  try {
+    const importedState = JSON.parse(await file.text());
+    const beforeSnapshot = geometrySnapshot();
+    applyAppState(importedState);
+    pushUndo(beforeSnapshot);
+    render();
+  } catch (error) {
+    alert("Не удалось импортировать чертеж. Проверьте, что выбран корректный JSON-файл.");
+  } finally {
+    controls.importFile.value = "";
+  }
 });
 
 controls.clearBtn.addEventListener("click", () => {
