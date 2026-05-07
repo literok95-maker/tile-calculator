@@ -1,8 +1,8 @@
 :root {
   color-scheme: light;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f4f0ea;
-  color: #202124;
+  background: #eef1f4;
+  color: #1d2329;
 }
 
 * {
@@ -11,7 +11,12 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(47, 111, 98, 0.10), transparent 34%),
+    linear-gradient(315deg, rgba(197, 95, 53, 0.08), transparent 30%),
+    #eef1f4;
 }
 
 button,
@@ -22,17 +27,20 @@ select {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 18px;
-  min-height: 100vh;
-  padding: 18px;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+  height: 100dvh;
+  padding: 14px;
+  overflow: hidden;
 }
 
 .workspace,
 .panel {
-  background: #fffdfa;
-  border: 1px solid #ddd5ca;
-  border-radius: 8px;
+  background: rgba(255, 253, 250, 0.94);
+  border: 1px solid rgba(190, 198, 204, 0.82);
+  border-radius: 12px;
+  box-shadow: 0 18px 42px rgba(29, 35, 41, 0.10);
+  min-height: 0;
 }
 
 .workspace {
@@ -44,9 +52,11 @@ select {
 .canvas-header {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 16px;
-  padding: 16px 18px;
-  border-bottom: 1px solid #e6ded3;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(215, 221, 226, 0.9);
+  background: rgba(255, 255, 255, 0.58);
 }
 
 h1,
@@ -56,19 +66,22 @@ p {
 }
 
 h1 {
-  font-size: 22px;
+  font-size: 20px;
   line-height: 1.2;
 }
 
 h2 {
-  font-size: 15px;
+  color: #2c353d;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   margin-bottom: 12px;
 }
 
 p {
   margin-top: 6px;
-  color: #6c6257;
-  font-size: 14px;
+  color: #68727c;
+  font-size: 13px;
 }
 
 .toolbar {
@@ -79,17 +92,19 @@ p {
 }
 
 button {
-  min-height: 38px;
-  border: 1px solid #cfc5b7;
-  border-radius: 6px;
-  background: #fff;
-  color: #202124;
+  min-height: 36px;
+  border: 1px solid #c7d0d8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1d2329;
   padding: 0 12px;
   cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
 button:hover {
-  background: #f7f2eb;
+  background: #f3f7f7;
+  border-color: #95a9ad;
 }
 
 button[aria-pressed="true"] {
@@ -109,8 +124,8 @@ button[aria-pressed="true"] {
   left: 0;
   min-width: 170px;
   padding: 6px;
-  border: 1px solid #cfc5b7;
-  border-radius: 6px;
+  border: 1px solid #c7d0d8;
+  border-radius: 10px;
   background: #fffdfa;
   box-shadow: 0 10px 24px rgba(32, 33, 36, 0.14);
 }
@@ -124,33 +139,45 @@ button[aria-pressed="true"] {
 
 .canvas-wrap {
   min-height: 0;
-  padding: 12px;
+  padding: 10px;
+  overflow: hidden;
 }
 
 canvas {
   width: 100%;
   height: 100%;
-  min-height: 520px;
+  min-height: 0;
   display: block;
-  border: 1px solid #d8d0c4;
-  border-radius: 8px;
+  border: 1px solid #cdd5dc;
+  border-radius: 10px;
   background: #faf7f2;
   cursor: crosshair;
 }
 
 .panel {
-  padding: 18px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 18px;
   overflow: auto;
+  scrollbar-width: thin;
+}
+
+.panel section {
+  padding-bottom: 16px;
+  border-bottom: 1px solid rgba(221, 226, 231, 0.9);
+}
+
+.panel section:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 label {
   display: grid;
   gap: 7px;
   margin-bottom: 12px;
-  color: #51483f;
+  color: #4d5963;
   font-size: 14px;
 }
 
@@ -165,11 +192,18 @@ input,
 select {
   width: 100%;
   min-height: 38px;
-  border: 1px solid #cfc5b7;
-  border-radius: 6px;
+  border: 1px solid #c7d0d8;
+  border-radius: 8px;
   background: #fff;
-  color: #202124;
+  color: #1d2329;
   padding: 0 10px;
+}
+
+input:focus,
+select:focus {
+  border-color: #2f6f62;
+  box-shadow: 0 0 0 3px rgba(47, 111, 98, 0.14);
+  outline: none;
 }
 
 input[type="range"] {
@@ -194,11 +228,11 @@ input[type="checkbox"] {
   align-items: baseline;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px solid #ece5db;
+  border-bottom: 1px solid #e7ecef;
 }
 
 dt {
-  color: #645a50;
+  color: #65717b;
 }
 
 dd {
@@ -210,9 +244,6 @@ dd {
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
-  }
-
-  .panel {
-    order: -1;
+    grid-template-rows: minmax(0, 1fr) 320px;
   }
 }
