@@ -130,10 +130,28 @@ button[aria-pressed="true"] {
   box-shadow: 0 10px 24px rgba(32, 33, 36, 0.14);
 }
 
-.snap-menu-list button {
+.snap-menu-list label {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  gap: 9px;
   width: 100%;
-  justify-content: flex-start;
-  text-align: left;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: #273039;
+  cursor: pointer;
+}
+
+.snap-menu-list label:hover {
+  background: #f3f7f7;
+}
+
+.snap-menu-list input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
   border-color: transparent;
 }
 
@@ -152,6 +170,11 @@ canvas {
   border-radius: 10px;
   background: #faf7f2;
   cursor: crosshair;
+}
+
+canvas:focus {
+  outline: 2px solid rgba(47, 111, 98, 0.28);
+  outline-offset: -3px;
 }
 
 .panel {

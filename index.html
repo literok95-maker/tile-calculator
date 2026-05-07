@@ -12,16 +12,24 @@
         <div class="canvas-header">
           <div>
             <h1>Расчет плитки на пол</h1>
-            <p>Рисуйте помещение, подбирайте раскладку и проверяйте обрезки на схеме.</p>
+            <p>Кликайте точки помещения, вводите точную длину сегмента с клавиатуры и проверяйте раскладку.</p>
           </div>
           <div class="toolbar" aria-label="Инструменты">
             <div class="snap-menu">
               <button id="snapModeBtn" type="button" aria-haspopup="true" aria-expanded="false" title="Режим привязки">🧲 Сетка</button>
               <div id="snapModeMenu" class="snap-menu-list" hidden>
-                <button type="button" data-snap-mode="grid">По сетке</button>
-                <button type="button" data-snap-mode="guides">По гайдлайнам</button>
-                <button type="button" data-snap-mode="grid-guides">Сетка + гайдлайны</button>
-                <button type="button" data-snap-mode="none">Без привязки</button>
+                <label>
+                  <input type="checkbox" data-snap-option="guides">
+                  Гайдлайны
+                </label>
+                <label>
+                  <input type="checkbox" data-snap-option="axes">
+                  Оси
+                </label>
+                <label>
+                  <input type="checkbox" data-snap-option="grid" checked>
+                  Сетка
+                </label>
               </div>
             </div>
             <button id="closePolygonBtn" type="button">Замкнуть</button>
@@ -33,7 +41,7 @@
           </div>
         </div>
         <div class="canvas-wrap">
-          <canvas id="planner" width="1120" height="760" aria-label="Редактор плана"></canvas>
+          <canvas id="planner" width="1120" height="760" tabindex="0" aria-label="Редактор плана"></canvas>
         </div>
       </section>
 

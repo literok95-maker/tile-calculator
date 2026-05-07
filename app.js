@@ -41,6 +41,7 @@ const state = {
   dragSnapshot: null,
   drawingSegment: false,
   draftPoint: null,
+  measureInput: "",
   guides: [],
   previousDrawUnit: "cm",
   viewportWidth: 1120,
@@ -53,7 +54,11 @@ const state = {
   lastPanPoint: null,
   undoStack: [],
   redoStack: [],
-  snapMode: "grid",
+  snapOptions: {
+    guides: false,
+    axes: false,
+    grid: true,
+  },
 };
 
 const basePixelsPerCm = 2;
@@ -107,18 +112,27 @@ function formatDrawingLength(cmValue) {
   return `${Number(rounded)} ${unitLabels[drawUnit()]}`;
 }
 
-function snapPoint(point) {
-  if (state.snapMode === "none") return point;
-  if (state.snapMode === "guides") return applyGuides(point);
-  if (state.snapMode === "grid-guides") {
-    const guided = applyGuides(point);
-    if (state.guides.length > 0) return guided;
-  }
+function parseMeasureInput() {
+  const normalized = state.measureInput.replace(",", ".");
+  const value = Number(normalized);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function snapPoint(point, options = {}) {
   const snapPx = cmToPx(drawingStepCm());
-  return {
-    x: Math.round(point.x / snapPx) * snapPx,
-    y: Math.round(point.y / snapPx) * snapPx,
-  };
+  let snapped = { ...point };
+
+  if (state.snapOptions.grid) {
+    snapped = {
+      x: Math.round(point.x / snapPx) * snapPx,
+      y: Math.round(point.y / snapPx) * snapPx,
+    };
+  }
+
+  const guided = applyGuides(point, options);
+  if (state.guides.some((guide) => guide.axis === "x")) snapped.x = guided.x;
+  if (state.guides.some((guide) => guide.axis === "y")) snapped.y = guided.y;
+  return snapped;
 }
 
 function geometrySnapshot() {
@@ -135,6 +149,7 @@ function restoreGeometry(snapshot) {
   state.dragSnapshot = null;
   state.drawingSegment = false;
   state.draftPoint = null;
+  state.measureInput = "";
   state.guides = [];
 }
 
@@ -146,7 +161,7 @@ function serializeAppState() {
     controls: {
       drawUnit: controls.drawUnit.value,
       gridStep: controls.gridStep.value,
-      snapMode: state.snapMode,
+      snapOptions: { ...state.snapOptions },
       tileWidth: controls.tileWidth.value,
       tileHeight: controls.tileHeight.value,
       grout: controls.grout.value,
@@ -178,7 +193,7 @@ function applyAppState(savedState) {
   restoreGeometry(savedState.geometry);
 
   Object.entries(savedState.controls || {}).forEach(([key, value]) => {
-    if (key === "snapMode") return;
+    if (key === "snapMode" || key === "snapOptions") return;
     const control = controls[key];
     if (!control) return;
     const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
@@ -191,14 +206,24 @@ function applyAppState(savedState) {
     }
   });
 
-  if (["grid", "guides", "grid-guides", "none"].includes(savedState.controls?.snapMode)) {
-    state.snapMode = savedState.controls.snapMode;
+  if (savedState.controls?.snapOptions && typeof savedState.controls.snapOptions === "object") {
+    state.snapOptions = {
+      guides: Boolean(savedState.controls.snapOptions.guides),
+      axes: Boolean(savedState.controls.snapOptions.axes),
+      grid: Boolean(savedState.controls.snapOptions.grid),
+    };
+  } else if (savedState.controls?.snapMode === "grid") {
+    state.snapOptions = { guides: false, axes: false, grid: true };
+  } else if (savedState.controls?.snapMode === "guides") {
+    state.snapOptions = { guides: true, axes: false, grid: false };
+  } else if (savedState.controls?.snapMode === "grid-guides") {
+    state.snapOptions = { guides: true, axes: false, grid: true };
+  } else if (savedState.controls?.snapMode === "none" || savedState.controls?.angleSnap === false) {
+    state.snapOptions = { guides: false, axes: false, grid: false };
   } else if (savedState.controls?.showGuides) {
-    state.snapMode = "guides";
-  } else if (savedState.controls?.angleSnap === false) {
-    state.snapMode = "none";
+    state.snapOptions = { guides: true, axes: false, grid: false };
   } else {
-    state.snapMode = "grid";
+    state.snapOptions = { guides: false, axes: false, grid: true };
   }
 
   state.previousDrawUnit = drawUnit();
@@ -207,7 +232,7 @@ function applyAppState(savedState) {
   state.viewPanY = Number(savedState.view?.panY) || 0;
   state.undoStack = [];
   state.redoStack = [];
-  syncSnapModeMenu();
+  syncSnapControls();
 }
 
 function saveAppState() {
@@ -273,18 +298,19 @@ function redo() {
   render();
 }
 
-function syncSnapModeMenu() {
-  const labels = {
-    grid: "🧲 Сетка",
-    guides: "🧲 Гайды",
-    "grid-guides": "🧲 Сетка + гайды",
-    none: "🧲 Выкл",
-  };
-  controls.snapModeBtn.textContent = labels[state.snapMode];
-  controls.snapModeMenu.querySelectorAll("[data-snap-mode]").forEach((button) => {
-    button.setAttribute("aria-pressed", String(button.dataset.snapMode === state.snapMode));
+function syncSnapControls() {
+  const activeLabels = [];
+  if (state.snapOptions.guides) activeLabels.push("гайды");
+  if (state.snapOptions.axes) activeLabels.push("оси");
+  if (state.snapOptions.grid) activeLabels.push("сетка");
+
+  controls.snapModeBtn.textContent = activeLabels.length > 0
+    ? `🧲 ${activeLabels.join(" + ")}`
+    : "🧲 Выкл";
+  controls.snapModeMenu.querySelectorAll("[data-snap-option]").forEach((input) => {
+    input.checked = Boolean(state.snapOptions[input.dataset.snapOption]);
   });
-  if (state.snapMode !== "guides" && state.snapMode !== "grid-guides") {
+  if (!state.snapOptions.guides && !state.snapOptions.axes) {
     state.guides = [];
   }
 }
@@ -305,37 +331,55 @@ function screenPointerPosition(event) {
 }
 
 function applyGuides(point, options = {}) {
-  if (state.snapMode !== "guides" && state.snapMode !== "grid-guides") {
+  if (!state.snapOptions.guides && !state.snapOptions.axes) {
     state.guides = [];
     return point;
   }
 
-  const { excludeIndex = -1 } = options;
+  const { excludeIndex = -1, anchor = null } = options;
   const guided = { ...point };
-  const guides = [];
+  const candidates = {
+    x: { distance: Infinity, value: null, type: "guide" },
+    y: { distance: Infinity, value: null, type: "guide" },
+  };
   let nearestX = { distance: Infinity, value: null };
   let nearestY = { distance: Infinity, value: null };
 
-  state.points.forEach((existing, index) => {
-    if (index === excludeIndex) return;
-    const xDistance = Math.abs(existing.x - point.x);
-    const yDistance = Math.abs(existing.y - point.y);
-    if (xDistance < nearestX.distance) {
-      nearestX = { distance: xDistance, value: existing.x };
+  if (state.snapOptions.axes && anchor) {
+    candidates.x = { distance: Math.abs(anchor.x - point.x), value: anchor.x, type: "axis" };
+    candidates.y = { distance: Math.abs(anchor.y - point.y), value: anchor.y, type: "axis" };
+  }
+
+  if (state.snapOptions.guides) {
+    state.points.forEach((existing, index) => {
+      if (index === excludeIndex) return;
+      const xDistance = Math.abs(existing.x - point.x);
+      const yDistance = Math.abs(existing.y - point.y);
+      if (xDistance < nearestX.distance) {
+        nearestX = { distance: xDistance, value: existing.x };
+      }
+      if (yDistance < nearestY.distance) {
+        nearestY = { distance: yDistance, value: existing.y };
+      }
+    });
+
+    if (nearestX.value !== null && nearestX.distance < candidates.x.distance) {
+      candidates.x = { ...nearestX, type: "guide" };
     }
-    if (yDistance < nearestY.distance) {
-      nearestY = { distance: yDistance, value: existing.y };
+    if (nearestY.value !== null && nearestY.distance < candidates.y.distance) {
+      candidates.y = { ...nearestY, type: "guide" };
     }
-  });
+  }
 
   const guideThreshold = guideSnapPx / state.viewZoom;
-  if (nearestX.value !== null && nearestX.distance <= guideThreshold) {
-    guided.x = nearestX.value;
-    guides.push({ axis: "x", value: nearestX.value });
+  const guides = [];
+  if (candidates.x.value !== null && candidates.x.distance <= guideThreshold) {
+    guided.x = candidates.x.value;
+    guides.push({ axis: "x", value: candidates.x.value, type: candidates.x.type });
   }
-  if (nearestY.value !== null && nearestY.distance <= guideThreshold) {
-    guided.y = nearestY.value;
-    guides.push({ axis: "y", value: nearestY.value });
+  if (candidates.y.value !== null && candidates.y.distance <= guideThreshold) {
+    guided.y = candidates.y.value;
+    guides.push({ axis: "y", value: candidates.y.value, type: candidates.y.type });
   }
 
   state.guides = guides;
@@ -343,7 +387,59 @@ function applyGuides(point, options = {}) {
 }
 
 function snapDrawingPoint(point, anchor = null) {
-  return snapPoint(point);
+  return snapPoint(point, { anchor });
+}
+
+function pointAtTypedLength(anchor, currentPoint) {
+  const typedLength = parseMeasureInput();
+  if (!typedLength || !anchor) return currentPoint;
+  const hasDirection = distance(anchor, currentPoint) > 0;
+  const angle = hasDirection ? Math.atan2(currentPoint.y - anchor.y, currentPoint.x - anchor.x) : 0;
+  const lengthPx = cmToPx(typedLength * unitToCm[drawUnit()]);
+  return {
+    x: anchor.x + Math.cos(angle) * lengthPx,
+    y: anchor.y + Math.sin(angle) * lengthPx,
+  };
+}
+
+function commitDraftPoint(point = state.draftPoint) {
+  if (!point || state.closed || state.points.length === 0) return false;
+  const anchor = state.points[state.points.length - 1];
+  if (distance(anchor, point) < 2 / state.viewZoom) return false;
+
+  const beforeSnapshot = geometrySnapshot();
+  state.points.push({ ...point });
+  pushUndo(beforeSnapshot);
+  state.drawingSegment = true;
+  state.draftPoint = { ...point };
+  state.measureInput = "";
+  state.guides = [];
+  return true;
+}
+
+function closeDrawingPolygon() {
+  if (state.points.length < 3 || state.closed) return false;
+  const beforeSnapshot = geometrySnapshot();
+  state.closed = true;
+  state.drawingSegment = false;
+  state.draftPoint = null;
+  state.measureInput = "";
+  state.guides = [];
+  pushUndo(beforeSnapshot);
+  return true;
+}
+
+function cancelDrawingSegment() {
+  state.drawingSegment = false;
+  state.draftPoint = null;
+  state.measureInput = "";
+  state.guides = [];
+}
+
+function isTextEntryTarget(target) {
+  return target instanceof HTMLInputElement ||
+    target instanceof HTMLSelectElement ||
+    target instanceof HTMLTextAreaElement;
 }
 
 function pointerPosition(event) {
@@ -736,14 +832,14 @@ function drawGridScaleLabel() {
 }
 
 function drawGuides() {
-  if ((state.snapMode !== "guides" && state.snapMode !== "grid-guides") || state.guides.length === 0) return;
+  if (state.guides.length === 0) return;
   const bounds = visibleWorldBounds();
 
   ctx.save();
   ctx.setLineDash([5, 5]);
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "#d97706";
   state.guides.forEach((guide) => {
+    ctx.strokeStyle = guide.type === "axis" ? "#2563eb" : "#d97706";
     ctx.beginPath();
     if (guide.axis === "x") {
       ctx.moveTo(guide.value, bounds.minY);
@@ -826,6 +922,29 @@ function drawDraftSegment() {
   ctx.beginPath();
   ctx.arc(state.draftPoint.x, state.draftPoint.y, 5, 0, Math.PI * 2);
   ctx.fill();
+
+  const mid = {
+    x: (anchor.x + state.draftPoint.x) / 2,
+    y: (anchor.y + state.draftPoint.y) / 2,
+  };
+  const text = state.measureInput
+    ? `${state.measureInput.replace(".", ",")} ${unitLabels[drawUnit()]}`
+    : formatDrawingLength(pxToCm(distance(anchor, state.draftPoint)));
+  ctx.font = "700 12px Inter, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const width = ctx.measureText(text).width + 14;
+  ctx.fillStyle = "rgba(255, 253, 250, 0.96)";
+  ctx.strokeStyle = "rgba(200, 95, 53, 0.45)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  roundedRectPath(mid.x - width / 2, mid.y - 12, width, 24, 6);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "#9d4525";
+  ctx.fillText(text, mid.x, mid.y + 0.5);
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
   ctx.restore();
 }
 
@@ -931,6 +1050,8 @@ function resizeCanvas() {
 }
 
 canvas.addEventListener("pointerdown", (event) => {
+  canvas.focus();
+
   if (event.button === 1) {
     event.preventDefault();
     state.panning = true;
@@ -942,6 +1063,22 @@ canvas.addEventListener("pointerdown", (event) => {
 
   const point = pointerPosition(event);
   const nearestIndex = state.points.findIndex((existing) => distance(existing, point) < 12 / state.viewZoom);
+  if (!state.closed && state.drawingSegment) {
+    if (nearestIndex === 0 && state.points.length >= 3) {
+      closeDrawingPolygon();
+      render();
+      return;
+    }
+
+    const anchor = state.points[state.points.length - 1];
+    const targetPoint = state.measureInput
+      ? pointAtTypedLength(anchor, state.draftPoint || snapDrawingPoint(point, anchor))
+      : snapDrawingPoint(point, anchor);
+    commitDraftPoint(targetPoint);
+    render();
+    return;
+  }
+
   if (nearestIndex >= 0) {
     state.guides = [];
     state.draggingIndex = nearestIndex;
@@ -951,7 +1088,7 @@ canvas.addEventListener("pointerdown", (event) => {
     return;
   }
   const segmentHit = segmentAtPoint(point);
-  if (segmentHit) {
+  if (segmentHit && !state.drawingSegment) {
     const beforeSnapshot = geometrySnapshot();
     state.points.splice(segmentHit.insertIndex, 0, snapPoint(segmentHit.point));
     pushUndo(beforeSnapshot);
@@ -968,7 +1105,7 @@ canvas.addEventListener("pointerdown", (event) => {
     const anchor = state.points[state.points.length - 1];
     state.drawingSegment = true;
     state.draftPoint = snapDrawingPoint(point, anchor);
-    canvas.setPointerCapture(event.pointerId);
+    state.measureInput = "";
     render();
   }
 });
@@ -985,35 +1122,32 @@ canvas.addEventListener("pointermove", (event) => {
 
   if (state.drawingSegment) {
     const anchor = state.points[state.points.length - 1];
-    state.draftPoint = snapDrawingPoint(pointerPosition(event), anchor);
+    const pointerPoint = snapDrawingPoint(pointerPosition(event), anchor);
+    state.draftPoint = pointAtTypedLength(anchor, pointerPoint);
     render();
     return;
   }
   if (state.draggingIndex < 0) return;
-  const guidedPoint = applyGuides(pointerPosition(event), { excludeIndex: state.draggingIndex });
-  state.points[state.draggingIndex] = snapPoint(guidedPoint);
+  const dragAnchor = state.dragSnapshot?.points?.[state.draggingIndex] || null;
+  state.points[state.draggingIndex] = snapPoint(pointerPosition(event), {
+    excludeIndex: state.draggingIndex,
+    anchor: dragAnchor,
+  });
   render();
 });
 
 canvas.addEventListener("pointerup", (event) => {
-  if (state.drawingSegment && state.draftPoint) {
-    const anchor = state.points[state.points.length - 1];
-    if (distance(anchor, state.draftPoint) >= cmToPx(drawingStepCm()) / 2) {
-      const beforeSnapshot = geometrySnapshot();
-      state.points.push(state.draftPoint);
-      pushUndo(beforeSnapshot);
-    }
-  }
+  const finishedDrag = state.draggingIndex >= 0;
   if (state.draggingIndex >= 0 && state.dragSnapshot) {
     pushUndo(state.dragSnapshot);
   }
   state.draggingIndex = -1;
   state.dragSnapshot = null;
-  state.drawingSegment = false;
-  state.draftPoint = null;
-  state.guides = [];
   state.panning = false;
   state.lastPanPoint = null;
+  if (finishedDrag) {
+    state.guides = [];
+  }
   if (canvas.hasPointerCapture(event.pointerId)) {
     canvas.releasePointerCapture(event.pointerId);
   }
@@ -1053,6 +1187,49 @@ window.addEventListener("keydown", (event) => {
     event.preventDefault();
     redo();
   }
+
+  if (isTextEntryTarget(event.target) || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!state.drawingSegment || state.closed || state.points.length === 0) return;
+
+  if (event.key === "Escape") {
+    event.preventDefault();
+    cancelDrawingSegment();
+    render();
+    return;
+  }
+
+  if (event.key === "Backspace") {
+    event.preventDefault();
+    state.measureInput = state.measureInput.slice(0, -1);
+    const anchor = state.points[state.points.length - 1];
+    if (state.draftPoint) {
+      state.draftPoint = pointAtTypedLength(anchor, state.draftPoint);
+    }
+    render();
+    return;
+  }
+
+  if (event.key === "Enter") {
+    event.preventDefault();
+    if (state.measureInput && state.draftPoint) {
+      const anchor = state.points[state.points.length - 1];
+      commitDraftPoint(pointAtTypedLength(anchor, state.draftPoint));
+    }
+    render();
+    return;
+  }
+
+  if (/^[0-9]$/.test(event.key) || event.key === "." || event.key === ",") {
+    event.preventDefault();
+    const separatorAlreadyTyped = state.measureInput.includes(".") || state.measureInput.includes(",");
+    if ((event.key === "." || event.key === ",") && separatorAlreadyTyped) return;
+    state.measureInput += event.key;
+    const anchor = state.points[state.points.length - 1];
+    if (state.draftPoint) {
+      state.draftPoint = pointAtTypedLength(anchor, state.draftPoint);
+    }
+    render();
+  }
 });
 
 controls.snapModeBtn.addEventListener("click", () => {
@@ -1062,12 +1239,15 @@ controls.snapModeBtn.addEventListener("click", () => {
 });
 
 controls.snapModeMenu.addEventListener("click", (event) => {
-  const button = event.target.closest("[data-snap-mode]");
-  if (!button) return;
-  state.snapMode = button.dataset.snapMode;
-  controls.snapModeBtn.setAttribute("aria-expanded", "false");
-  controls.snapModeMenu.hidden = true;
-  syncSnapModeMenu();
+  if (!event.target.closest("[data-snap-option]")) return;
+  event.stopPropagation();
+});
+
+controls.snapModeMenu.addEventListener("change", (event) => {
+  const input = event.target.closest("[data-snap-option]");
+  if (!input) return;
+  state.snapOptions[input.dataset.snapOption] = input.checked;
+  syncSnapControls();
   render();
 });
 
@@ -1079,9 +1259,7 @@ document.addEventListener("click", (event) => {
 
 controls.closePolygonBtn.addEventListener("click", () => {
   if (state.points.length >= 3) {
-    const beforeSnapshot = geometrySnapshot();
-    state.closed = true;
-    pushUndo(beforeSnapshot);
+    closeDrawingPolygon();
   }
   render();
 });
@@ -1095,9 +1273,7 @@ controls.removeLastPointBtn.addEventListener("click", () => {
   pushUndo(beforeSnapshot);
   state.draggingIndex = -1;
   state.dragSnapshot = null;
-  state.drawingSegment = false;
-  state.draftPoint = null;
-  state.guides = [];
+  cancelDrawingSegment();
   render();
 });
 
@@ -1136,6 +1312,7 @@ controls.clearBtn.addEventListener("click", () => {
   const beforeSnapshot = geometrySnapshot();
   state.points = [];
   state.closed = false;
+  cancelDrawingSegment();
   pushUndo(beforeSnapshot);
   render();
 });
@@ -1155,6 +1332,6 @@ Object.values(controls).forEach((control) => {
 });
 
 restoreAppState();
-syncSnapModeMenu();
+syncSnapControls();
 new ResizeObserver(resizeCanvas).observe(canvas);
 resizeCanvas();
