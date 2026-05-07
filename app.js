@@ -4,8 +4,6 @@ const ctx = canvas.getContext("2d");
 const controls = {
   drawUnit: document.querySelector("#drawUnit"),
   gridStep: document.querySelector("#gridStep"),
-  angleSnap: document.querySelector("#angleSnap"),
-  showGuides: document.querySelector("#showGuides"),
   tileWidth: document.querySelector("#tileWidth"),
   tileHeight: document.querySelector("#tileHeight"),
   grout: document.querySelector("#grout"),
@@ -21,8 +19,8 @@ const controls = {
   tilesRaw: document.querySelector("#tilesRaw"),
   tilesWithWaste: document.querySelector("#tilesWithWaste"),
   cutTiles: document.querySelector("#cutTiles"),
-  toggleSnapBtn: document.querySelector("#toggleSnapBtn"),
-  toggleGuidesBtn: document.querySelector("#toggleGuidesBtn"),
+  snapModeBtn: document.querySelector("#snapModeBtn"),
+  snapModeMenu: document.querySelector("#snapModeMenu"),
   closePolygonBtn: document.querySelector("#closePolygonBtn"),
   removeLastPointBtn: document.querySelector("#removeLastPointBtn"),
   clearBtn: document.querySelector("#clearBtn"),
@@ -52,6 +50,7 @@ const state = {
   lastPanPoint: null,
   undoStack: [],
   redoStack: [],
+  snapMode: "grid",
 };
 
 const basePixelsPerCm = 2;
@@ -66,7 +65,6 @@ const unitLabels = {
   cm: "см",
   m: "м",
 };
-const snapAngles = [0, 90];
 const guideSnapPx = 8;
 const storageKey = "tile-calculator-state-v1";
 let isRestoringState = false;
@@ -106,6 +104,12 @@ function formatDrawingLength(cmValue) {
 }
 
 function snapPoint(point) {
+  if (state.snapMode === "none") return point;
+  if (state.snapMode === "guides") return applyGuides(point);
+  if (state.snapMode === "grid-guides") {
+    const guided = applyGuides(point);
+    if (state.guides.length > 0) return guided;
+  }
   const snapPx = cmToPx(drawingStepCm());
   return {
     x: Math.round(point.x / snapPx) * snapPx,
@@ -136,8 +140,7 @@ function serializeAppState() {
     controls: {
       drawUnit: controls.drawUnit.value,
       gridStep: controls.gridStep.value,
-      angleSnap: controls.angleSnap.checked,
-      showGuides: controls.showGuides.checked,
+      snapMode: state.snapMode,
       tileWidth: controls.tileWidth.value,
       tileHeight: controls.tileHeight.value,
       grout: controls.grout.value,
@@ -184,6 +187,7 @@ function restoreAppState() {
     }
 
     Object.entries(savedState.controls || {}).forEach(([key, value]) => {
+      if (key === "snapMode") return;
       const control = controls[key];
       if (!control) return;
       const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
@@ -195,6 +199,14 @@ function restoreAppState() {
         control.value = String(migratedValue);
       }
     });
+
+    if (["grid", "guides", "grid-guides", "none"].includes(savedState.controls?.snapMode)) {
+      state.snapMode = savedState.controls.snapMode;
+    } else if (savedState.controls?.showGuides) {
+      state.snapMode = "guides";
+    } else if (savedState.controls?.angleSnap === false) {
+      state.snapMode = "none";
+    }
 
     state.previousDrawUnit = drawUnit();
     state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
@@ -243,15 +255,18 @@ function redo() {
   render();
 }
 
-function syncSnapToggle() {
-  controls.toggleSnapBtn.textContent = controls.angleSnap.checked ? "Привязка: вкл" : "Привязка: выкл";
-  controls.toggleSnapBtn.setAttribute("aria-pressed", String(controls.angleSnap.checked));
-}
-
-function syncGuidesToggle() {
-  controls.toggleGuidesBtn.textContent = controls.showGuides.checked ? "Гайды: вкл" : "Гайды: выкл";
-  controls.toggleGuidesBtn.setAttribute("aria-pressed", String(controls.showGuides.checked));
-  if (!controls.showGuides.checked) {
+function syncSnapModeMenu() {
+  const labels = {
+    grid: "🧲 Сетка",
+    guides: "🧲 Гайды",
+    "grid-guides": "🧲 Сетка + гайды",
+    none: "🧲 Выкл",
+  };
+  controls.snapModeBtn.textContent = labels[state.snapMode];
+  controls.snapModeMenu.querySelectorAll("[data-snap-mode]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.snapMode === state.snapMode));
+  });
+  if (state.snapMode !== "guides" && state.snapMode !== "grid-guides") {
     state.guides = [];
   }
 }
@@ -272,7 +287,7 @@ function screenPointerPosition(event) {
 }
 
 function applyGuides(point, options = {}) {
-  if (!controls.showGuides.checked) {
+  if (state.snapMode !== "guides" && state.snapMode !== "grid-guides") {
     state.guides = [];
     return point;
   }
@@ -309,41 +324,8 @@ function applyGuides(point, options = {}) {
   return guided;
 }
 
-function snapAnglePoint(anchor, rawPoint) {
-  if (!controls.angleSnap.checked) return rawPoint;
-  const dx = rawPoint.x - anchor.x;
-  const dy = rawPoint.y - anchor.y;
-  const length = Math.hypot(dx, dy);
-  if (length < 1) return rawPoint;
-
-  const rawDegrees = Math.atan2(dy, dx) * (180 / Math.PI);
-  const normalized = ((rawDegrees % 360) + 360) % 360;
-  const quadrant = Math.floor(normalized / 90);
-  const local = normalized - quadrant * 90;
-  const nearestLocal = snapAngles.reduce((best, angle) => (
-    Math.abs(angle - local) < Math.abs(best - local) ? angle : best
-  ), snapAngles[0]);
-  const snappedDegrees = quadrant * 90 + nearestLocal;
-  const radians = snappedDegrees * (Math.PI / 180);
-  return {
-    x: anchor.x + Math.cos(radians) * length,
-    y: anchor.y + Math.sin(radians) * length,
-  };
-}
-
 function snapDrawingPoint(point, anchor = null) {
-  const guided = applyGuides(point);
-  if (!anchor) return snapPoint(guided);
-  if (!controls.angleSnap.checked || state.guides.length > 0) return snapPoint(guided);
-  const angleSnapped = snapAnglePoint(anchor, guided);
-  const length = distance(anchor, angleSnapped);
-  const stepPx = cmToPx(drawingStepCm());
-  const snappedLength = Math.max(Math.round(length / stepPx) * stepPx, stepPx);
-  const angle = Math.atan2(angleSnapped.y - anchor.y, angleSnapped.x - anchor.x);
-  return {
-    x: anchor.x + Math.cos(angle) * snappedLength,
-    y: anchor.y + Math.sin(angle) * snappedLength,
-  };
+  return snapPoint(point);
 }
 
 function pointerPosition(event) {
@@ -736,7 +718,7 @@ function drawGridScaleLabel() {
 }
 
 function drawGuides() {
-  if (!controls.showGuides.checked || state.guides.length === 0) return;
+  if ((state.snapMode !== "guides" && state.snapMode !== "grid-guides") || state.guides.length === 0) return;
   const bounds = visibleWorldBounds();
 
   ctx.save();
@@ -1055,23 +1037,26 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-controls.toggleSnapBtn.addEventListener("click", () => {
-  controls.angleSnap.checked = !controls.angleSnap.checked;
-  syncSnapToggle();
+controls.snapModeBtn.addEventListener("click", () => {
+  const expanded = controls.snapModeBtn.getAttribute("aria-expanded") === "true";
+  controls.snapModeBtn.setAttribute("aria-expanded", String(!expanded));
+  controls.snapModeMenu.hidden = expanded;
+});
+
+controls.snapModeMenu.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-snap-mode]");
+  if (!button) return;
+  state.snapMode = button.dataset.snapMode;
+  controls.snapModeBtn.setAttribute("aria-expanded", "false");
+  controls.snapModeMenu.hidden = true;
+  syncSnapModeMenu();
   render();
 });
 
-controls.angleSnap.addEventListener("input", syncSnapToggle);
-
-controls.toggleGuidesBtn.addEventListener("click", () => {
-  controls.showGuides.checked = !controls.showGuides.checked;
-  syncGuidesToggle();
-  render();
-});
-
-controls.showGuides.addEventListener("input", () => {
-  syncGuidesToggle();
-  render();
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".snap-menu")) return;
+  controls.snapModeBtn.setAttribute("aria-expanded", "false");
+  controls.snapModeMenu.hidden = true;
 });
 
 controls.closePolygonBtn.addEventListener("click", () => {
@@ -1121,7 +1106,6 @@ Object.values(controls).forEach((control) => {
 });
 
 restoreAppState();
-syncSnapToggle();
-syncGuidesToggle();
+syncSnapModeMenu();
 new ResizeObserver(resizeCanvas).observe(canvas);
 resizeCanvas();

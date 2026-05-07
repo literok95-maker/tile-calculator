@@ -15,8 +15,15 @@
             <p>Кликните по сетке, чтобы задать углы помещения. Новые сегменты привязываются к горизонтали и вертикали.</p>
           </div>
           <div class="toolbar" aria-label="Инструменты">
-            <button id="toggleSnapBtn" type="button" aria-pressed="true">Привязка: вкл</button>
-            <button id="toggleGuidesBtn" type="button" aria-pressed="true">Гайды: вкл</button>
+            <div class="snap-menu">
+              <button id="snapModeBtn" type="button" aria-haspopup="true" aria-expanded="false" title="Режим привязки">🧲 Сетка</button>
+              <div id="snapModeMenu" class="snap-menu-list" hidden>
+                <button type="button" data-snap-mode="grid">По сетке</button>
+                <button type="button" data-snap-mode="guides">По гайдлайнам</button>
+                <button type="button" data-snap-mode="grid-guides">Сетка + гайдлайны</button>
+                <button type="button" data-snap-mode="none">Без привязки</button>
+              </div>
+            </div>
             <button id="closePolygonBtn" type="button">Замкнуть</button>
             <button id="removeLastPointBtn" type="button">Удалить последнюю</button>
             <button id="clearBtn" type="button">Очистить</button>
@@ -41,14 +48,6 @@
           <label>
             Шаг сетки
             <input id="gridStep" type="number" min="0.01" value="10" step="1">
-          </label>
-          <label class="check-row">
-            <input id="angleSnap" type="checkbox" checked>
-            Привязка новых сегментов к 0/90°
-          </label>
-          <label class="check-row">
-            <input id="showGuides" type="checkbox" checked>
-            Показывать гайдлайны
           </label>
         </section>
 

@@ -98,6 +98,30 @@ button[aria-pressed="true"] {
   color: #1f4f45;
 }
 
+.snap-menu {
+  position: relative;
+}
+
+.snap-menu-list {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 170px;
+  padding: 6px;
+  border: 1px solid #cfc5b7;
+  border-radius: 6px;
+  background: #fffdfa;
+  box-shadow: 0 10px 24px rgba(32, 33, 36, 0.14);
+}
+
+.snap-menu-list button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  border-color: transparent;
+}
+
 .canvas-wrap {
   min-height: 0;
   padding: 12px;
