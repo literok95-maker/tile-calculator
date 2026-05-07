@@ -2,14 +2,11 @@
 // It is initialized from React after the DOM controls are rendered.
 // @ts-nocheck
 import {
-  boundsFor,
   closestPointOnSegment,
   distance,
   polygonArea,
-  rotatedPoint,
-  tileCoverage,
-  tileIntersectsPolygon,
 } from "./geometry";
+import { calculateTileLayout, tileCenter } from "./tileLayout";
 
 export function initPlanner(): void {
   const canvas = document.querySelector<HTMLCanvasElement>("#planner");
@@ -485,24 +482,6 @@ export function initPlanner(): void {
     return best;
   }
   
-  function tilePolygon(x, y, width, height, angle, rowOffset) {
-    const ox = x + rowOffset;
-    const corners = [
-      { x: ox, y },
-      { x: ox + width, y },
-      { x: ox + width, y: y + height },
-      { x: ox, y: y + height },
-    ];
-    return corners.map((point) => rotatedPoint(origin.x, origin.y, point.x - origin.x, point.y - origin.y, angle));
-  }
-  
-  function tileCenter(tile) {
-    return {
-      x: tile.points.reduce((sum, point) => sum + point.x, 0) / tile.points.length,
-      y: tile.points.reduce((sum, point) => sum + point.y, 0) / tile.points.length,
-    };
-  }
-  
   function roundedRectPath(x, y, width, height, radius) {
     const r = Math.min(radius, width / 2, height / 2);
     ctx.moveTo(x + r, y);
@@ -516,98 +495,6 @@ export function initPlanner(): void {
     ctx.quadraticCurveTo(x, y, x + r, y);
   }
   
-  function assignTileNumbers(tiles) {
-    let nextSourceNumber = 1;
-    const cutBins = [];
-  
-    tiles
-      .filter((tile) => tile.full)
-      .forEach((tile) => {
-        tile.sourceNumber = nextSourceNumber;
-        tile.label = String(nextSourceNumber);
-        nextSourceNumber += 1;
-      });
-  
-    tiles
-      .filter((tile) => !tile.full)
-      .sort((a, b) => b.coverage - a.coverage)
-      .forEach((tile) => {
-        let bin = cutBins.find((candidate) => candidate.remaining + 0.001 >= tile.coverage);
-        if (!bin) {
-          bin = {
-            sourceNumber: nextSourceNumber,
-            remaining: 1,
-            fragmentCount: 0,
-          };
-          cutBins.push(bin);
-          nextSourceNumber += 1;
-        }
-  
-        bin.fragmentCount = (bin.fragmentCount || 0) + 1;
-        bin.remaining -= tile.coverage;
-        tile.sourceNumber = bin.sourceNumber;
-        tile.fragmentNumber = bin.fragmentCount;
-        tile.label = `${tile.sourceNumber}.${tile.fragmentNumber}`;
-      });
-  
-    return nextSourceNumber - 1;
-  }
-  
-  function collectIntersectingTile(tile, tiles) {
-    if (!tileIntersectsPolygon(tile, state.points)) return 0;
-    const coverageResult = tileCoverage(tile, state.points);
-    const coverage = coverageResult.ratio;
-    if (coverage === 0) return 0;
-    const full = coverage >= 0.98;
-    tiles.push({ points: tile, full, coverage, labelPoint: coverageResult.labelPoint });
-    return full ? 0 : 1;
-  }
-  
-  function herringbonePoint(x, y, angle, offsetX = 0, offsetY = 0) {
-    const longUnit = {
-      x: Math.cos(angle),
-      y: Math.sin(angle),
-    };
-    const shortUnit = {
-      x: -Math.sin(angle),
-      y: Math.cos(angle),
-    };
-  
-    return {
-      x: origin.x + offsetX + longUnit.x * x + shortUnit.x * y,
-      y: origin.y + offsetY + longUnit.y * x + shortUnit.y * y,
-    };
-  }
-  
-  function herringboneTileSet(x0, y0, a, b, angle, offsetX = 0, offsetY = 0) {
-    return [
-      [
-        herringbonePoint(x0, y0, angle, offsetX, offsetY),
-        herringbonePoint(x0, y0 + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + b, y0 + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + b, y0, angle, offsetX, offsetY),
-      ],
-      [
-        herringbonePoint(x0 + a, y0 + a, angle, offsetX, offsetY),
-        herringbonePoint(x0, y0 + a, angle, offsetX, offsetY),
-        herringbonePoint(x0, y0 + a + b, angle, offsetX, offsetY),
-        herringbonePoint(x0 + a, y0 + a + b, angle, offsetX, offsetY),
-      ],
-      [
-        herringbonePoint(x0 + a, y0 + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + a, y0 + a + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + b + a, y0 + a + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + b + a, y0 + a, angle, offsetX, offsetY),
-      ],
-      [
-        herringbonePoint(x0 + a + a, y0 + a + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + a, y0 + a + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + a, y0 + a + b + a, angle, offsetX, offsetY),
-        herringbonePoint(x0 + a + a, y0 + a + b + a, angle, offsetX, offsetY),
-      ],
-    ];
-  }
-  
   function calculateTiles() {
     if (!state.closed || state.points.length < 3) {
       return { tiles: [], cut: 0, materialTiles: 0 };
@@ -617,51 +504,20 @@ export function initPlanner(): void {
     const tileHeight = cmToPx((Number(controls.tileHeight.value) + Number(controls.grout.value)) / 10);
     const layout = controls.layout.value;
     const baseRotation = Number(controls.rotation.value) * (Math.PI / 180);
-    const angle = baseRotation + (layout === "diagonal" ? Math.PI / 4 : 0);
     const layoutOffsetX = cmToPx(Number(controls.layoutOffsetX.value) || 0);
     const layoutOffsetY = cmToPx(Number(controls.layoutOffsetY.value) || 0);
-    const bounds = boundsFor(state.points);
-    const padding = Math.max(tileWidth, tileHeight) * 3;
-    const tiles = [];
-    let cut = 0;
-  
-    const startX = Math.floor((bounds.minX - padding) / tileWidth) * tileWidth;
-    const endX = bounds.maxX + padding;
-    const startY = Math.floor((bounds.minY - padding) / tileHeight) * tileHeight;
-    const endY = bounds.maxY + padding;
-  
-    if (layout === "herringbone") {
-      const longSide = Math.max(tileWidth, tileHeight);
-      const shortSide = Math.min(tileWidth, tileHeight);
-      const repeatAlong = shortSide * 2;
-      const repeatAcross = longSide;
-      const herringbonePadding = Math.max(state.viewportWidth, state.viewportHeight) + longSide * 3;
-      const alongCount = Math.ceil(herringbonePadding / repeatAlong) + 4;
-      const acrossCount = Math.ceil(herringbonePadding / repeatAcross) + 4;
-  
-      for (let along = -alongCount; along <= alongCount; along += 1) {
-        for (let across = -acrossCount; across <= acrossCount; across += 1) {
-          const x0 = repeatAlong * along + repeatAcross * across;
-          const y0 = repeatAlong * along - repeatAcross * across;
-          herringboneTileSet(x0, y0, shortSide, longSide, baseRotation, layoutOffsetX, layoutOffsetY).forEach((tile) => {
-            cut += collectIntersectingTile(tile, tiles);
-          });
-        }
-      }
-    } else {
-      let row = 0;
-      for (let y = startY; y <= endY; y += tileHeight) {
-        const rowOffset = layout === "brick" && row % 2 === 1 ? tileWidth / 2 : 0;
-        for (let x = startX; x <= endX; x += tileWidth) {
-          const tile = tilePolygon(x + layoutOffsetX, y + layoutOffsetY, tileWidth, tileHeight, angle, rowOffset);
-          cut += collectIntersectingTile(tile, tiles);
-        }
-        row += 1;
-      }
-    }
-  
-    const materialTiles = assignTileNumbers(tiles);
-    return { tiles, cut, materialTiles };
+    return calculateTileLayout({
+      room: state.points,
+      origin,
+      tileWidth,
+      tileHeight,
+      layout,
+      rotation: baseRotation,
+      offsetX: layoutOffsetX,
+      offsetY: layoutOffsetY,
+      viewportWidth: state.viewportWidth,
+      viewportHeight: state.viewportHeight,
+    });
   }
   
   function visibleWorldBounds() {
