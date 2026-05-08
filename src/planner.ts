@@ -14,20 +14,11 @@ import {
   type GeometrySnapshot,
   normalizeSnapOptions,
   type SavedProject,
-  type SnapOption,
   type SnapOptions,
-  STORAGE_KEY,
 } from "./projectState";
+import { clearStoredProject, loadProjectFromStorage, saveProjectToStorage } from "./projectStorage";
+import { type Guide, readSnapOption, snapLabel, snapPointToContext } from "./snap";
 import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
-
-type GuideAxis = "x" | "y";
-type GuideType = "guide" | "axis";
-
-interface Guide {
-  axis: GuideAxis;
-  value: number;
-  type: GuideType;
-}
 
 interface SnapOptionsContext {
   excludeIndex?: number;
@@ -215,20 +206,17 @@ export function initPlanner(): void {
   }
   
   function snapPoint(point: Point, options: SnapOptionsContext = {}): Point {
-    const snapPx = cmToPx(drawingStepCm());
-    let snapped = { ...point };
-  
-    if (state.snapOptions.grid) {
-      snapped = {
-        x: Math.round(point.x / snapPx) * snapPx,
-        y: Math.round(point.y / snapPx) * snapPx,
-      };
-    }
-  
-    const guided = applyGuides(point, options);
-    if (state.guides.some((guide) => guide.axis === "x")) snapped.x = guided.x;
-    if (state.guides.some((guide) => guide.axis === "y")) snapped.y = guided.y;
-    return snapped;
+    const result = snapPointToContext(point, {
+      points: state.points,
+      snapOptions: state.snapOptions,
+      gridStepPx: cmToPx(drawingStepCm()),
+      viewZoom: state.viewZoom,
+      guideSnapPx,
+      excludeIndex: options.excludeIndex,
+      anchor: options.anchor,
+    });
+    state.guides = result.guides;
+    return result.point;
   }
   
   function geometrySnapshot(): GeometrySnapshot {
@@ -311,28 +299,21 @@ export function initPlanner(): void {
   function saveAppState(): void {
     if (isRestoringState) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeAppState()));
+      saveProjectToStorage(serializeAppState());
     } catch (error) {
       // Storage can be unavailable in restricted browser modes.
     }
   }
   
   function restoreAppState(): void {
-    let rawState: string | null = null;
     try {
-      rawState = localStorage.getItem(STORAGE_KEY);
-    } catch (error) {
-      return;
-    }
-    if (!rawState) return;
-  
-    try {
+      const savedState = loadProjectFromStorage();
+      if (!savedState) return;
       isRestoringState = true;
-      const savedState = JSON.parse(rawState);
       applyAppState(savedState);
     } catch (error) {
       try {
-        localStorage.removeItem(STORAGE_KEY);
+        clearStoredProject();
       } catch (removeError) {
         // Ignore storage cleanup failures.
       }
@@ -374,18 +355,11 @@ export function initPlanner(): void {
   }
   
   function syncSnapControls(): void {
-    const activeLabels: string[] = [];
-    if (state.snapOptions.guides) activeLabels.push("гайды");
-    if (state.snapOptions.axes) activeLabels.push("оси");
-    if (state.snapOptions.grid) activeLabels.push("сетка");
-  
-    controls.snapModeBtn.textContent = activeLabels.length > 0
-      ? `🧲 ${activeLabels.join(" + ")}`
-      : "🧲 Выкл";
-  controls.snapModeMenu.querySelectorAll<HTMLInputElement>("[data-snap-option]").forEach((input) => {
-    const option = input.dataset.snapOption as SnapOption | undefined;
-    input.checked = option ? Boolean(state.snapOptions[option]) : false;
-  });
+    controls.snapModeBtn.textContent = snapLabel(state.snapOptions);
+    controls.snapModeMenu.querySelectorAll<HTMLInputElement>("[data-snap-option]").forEach((input) => {
+      const option = readSnapOption(input.dataset.snapOption);
+      input.checked = option ? Boolean(state.snapOptions[option]) : false;
+    });
     if (!state.snapOptions.guides && !state.snapOptions.axes) {
       state.guides = [];
     }
@@ -404,62 +378,6 @@ export function initPlanner(): void {
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
     };
-  }
-  
-  function applyGuides(point: Point, options: SnapOptionsContext = {}): Point {
-    if (!state.snapOptions.guides && !state.snapOptions.axes) {
-      state.guides = [];
-      return point;
-    }
-  
-    const { excludeIndex = -1, anchor = null } = options;
-    const guided = { ...point };
-    const candidates: Record<GuideAxis, { distance: number; value: number | null; type: GuideType }> = {
-      x: { distance: Infinity, value: null, type: "guide" },
-      y: { distance: Infinity, value: null, type: "guide" },
-    };
-    let nearestX: { distance: number; value: number | null } = { distance: Infinity, value: null };
-    let nearestY: { distance: number; value: number | null } = { distance: Infinity, value: null };
-  
-    if (state.snapOptions.axes && anchor) {
-      candidates.x = { distance: Math.abs(anchor.x - point.x), value: anchor.x, type: "axis" };
-      candidates.y = { distance: Math.abs(anchor.y - point.y), value: anchor.y, type: "axis" };
-    }
-  
-    if (state.snapOptions.guides) {
-      state.points.forEach((existing, index) => {
-        if (index === excludeIndex) return;
-        const xDistance = Math.abs(existing.x - point.x);
-        const yDistance = Math.abs(existing.y - point.y);
-        if (xDistance < nearestX.distance) {
-          nearestX = { distance: xDistance, value: existing.x };
-        }
-        if (yDistance < nearestY.distance) {
-          nearestY = { distance: yDistance, value: existing.y };
-        }
-      });
-  
-      if (nearestX.value !== null && nearestX.distance < candidates.x.distance) {
-        candidates.x = { ...nearestX, type: "guide" };
-      }
-      if (nearestY.value !== null && nearestY.distance < candidates.y.distance) {
-        candidates.y = { ...nearestY, type: "guide" };
-      }
-    }
-  
-    const guideThreshold = guideSnapPx / state.viewZoom;
-  const guides: Guide[] = [];
-    if (candidates.x.value !== null && candidates.x.distance <= guideThreshold) {
-      guided.x = candidates.x.value;
-      guides.push({ axis: "x", value: candidates.x.value, type: candidates.x.type });
-    }
-    if (candidates.y.value !== null && candidates.y.distance <= guideThreshold) {
-      guided.y = candidates.y.value;
-      guides.push({ axis: "y", value: candidates.y.value, type: candidates.y.type });
-    }
-  
-    state.guides = guides;
-    return guided;
   }
   
   function snapDrawingPoint(point: Point, anchor: Point | null = null): Point {
@@ -1049,7 +967,7 @@ export function initPlanner(): void {
     const target = event.target instanceof Element ? event.target : null;
     const input = target?.closest<HTMLInputElement>("[data-snap-option]");
     if (!input) return;
-    const option = input.dataset.snapOption as SnapOption | undefined;
+    const option = readSnapOption(input.dataset.snapOption);
     if (!option) return;
     state.snapOptions[option] = input.checked;
     syncSnapControls();
