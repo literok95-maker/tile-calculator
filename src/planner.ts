@@ -6,10 +6,20 @@ import {
   type Point,
   polygonArea,
 } from "./geometry";
+import {
+  assertSavedProject,
+  defaultSnapOptions,
+  EXPORT_FORMAT,
+  type DrawUnit,
+  type GeometrySnapshot,
+  normalizeSnapOptions,
+  type SavedProject,
+  type SnapOption,
+  type SnapOptions,
+  STORAGE_KEY,
+} from "./projectState";
 import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
 
-type DrawUnit = "mm" | "cm" | "m";
-type SnapOption = "guides" | "axes" | "grid";
 type GuideAxis = "x" | "y";
 type GuideType = "guide" | "axis";
 
@@ -19,20 +29,9 @@ interface Guide {
   type: GuideType;
 }
 
-interface SnapOptions {
-  guides: boolean;
-  axes: boolean;
-  grid: boolean;
-}
-
 interface SnapOptionsContext {
   excludeIndex?: number;
   anchor?: Point | null;
-}
-
-interface GeometrySnapshot {
-  points: Point[];
-  closed: boolean;
 }
 
 interface PlannerState extends GeometrySnapshot {
@@ -82,23 +81,6 @@ interface PlannerControls {
   importBtn: HTMLButtonElement;
   importFile: HTMLInputElement;
   clearBtn: HTMLButtonElement;
-}
-
-interface SavedProject {
-  format?: string;
-  version?: number;
-  geometry?: GeometrySnapshot;
-  controls?: Partial<Record<keyof PlannerControls, unknown>> & {
-    snapMode?: "grid" | "guides" | "grid-guides" | "none";
-    snapOptions?: Partial<SnapOptions>;
-    showGuides?: boolean;
-    angleSnap?: boolean;
-  };
-  view?: {
-    zoom?: unknown;
-    panX?: unknown;
-    panY?: unknown;
-  };
 }
 
 interface SegmentInsertHit {
@@ -174,11 +156,7 @@ export function initPlanner(): void {
     lastPanPoint: null,
     undoStack: [],
     redoStack: [],
-    snapOptions: {
-      guides: false,
-      axes: false,
-      grid: true,
-    },
+    snapOptions: defaultSnapOptions(),
   };
   
   const basePixelsPerCm = 2;
@@ -194,8 +172,6 @@ export function initPlanner(): void {
     m: "м",
   };
   const guideSnapPx = 8;
-  const storageKey = "tile-calculator-state-v1";
-  const exportFormat = "tile-calculator-project";
   let isRestoringState = false;
   
   function pxPerCm(): number {
@@ -275,7 +251,7 @@ export function initPlanner(): void {
   
   function serializeAppState(): SavedProject {
     return {
-      format: exportFormat,
+      format: EXPORT_FORMAT,
       version: 1,
       geometry: geometrySnapshot(),
       controls: {
@@ -303,14 +279,9 @@ export function initPlanner(): void {
   }
   
   function applyAppState(savedState: SavedProject): void {
-    if (!savedState || typeof savedState !== "object") {
-      throw new Error("Invalid project file");
-    }
-    if (!savedState.geometry || !Array.isArray(savedState.geometry.points)) {
-      throw new Error("Project file does not contain geometry");
-    }
+    assertSavedProject(savedState);
   
-    restoreGeometry(savedState.geometry);
+    restoreGeometry(savedState.geometry!);
   
     Object.entries(savedState.controls || {}).forEach(([key, value]) => {
       if (key === "snapMode" || key === "snapOptions") return;
@@ -326,25 +297,7 @@ export function initPlanner(): void {
       }
     });
   
-    if (savedState.controls?.snapOptions && typeof savedState.controls.snapOptions === "object") {
-      state.snapOptions = {
-        guides: Boolean(savedState.controls.snapOptions.guides),
-        axes: Boolean(savedState.controls.snapOptions.axes),
-        grid: Boolean(savedState.controls.snapOptions.grid),
-      };
-    } else if (savedState.controls?.snapMode === "grid") {
-      state.snapOptions = { guides: false, axes: false, grid: true };
-    } else if (savedState.controls?.snapMode === "guides") {
-      state.snapOptions = { guides: true, axes: false, grid: false };
-    } else if (savedState.controls?.snapMode === "grid-guides") {
-      state.snapOptions = { guides: true, axes: false, grid: true };
-    } else if (savedState.controls?.snapMode === "none" || savedState.controls?.angleSnap === false) {
-      state.snapOptions = { guides: false, axes: false, grid: false };
-    } else if (savedState.controls?.showGuides) {
-      state.snapOptions = { guides: true, axes: false, grid: false };
-    } else {
-      state.snapOptions = { guides: false, axes: false, grid: true };
-    }
+    state.snapOptions = normalizeSnapOptions(savedState.controls);
   
     state.previousDrawUnit = drawUnit();
     state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
@@ -358,7 +311,7 @@ export function initPlanner(): void {
   function saveAppState(): void {
     if (isRestoringState) return;
     try {
-      localStorage.setItem(storageKey, JSON.stringify(serializeAppState()));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeAppState()));
     } catch (error) {
       // Storage can be unavailable in restricted browser modes.
     }
@@ -367,7 +320,7 @@ export function initPlanner(): void {
   function restoreAppState(): void {
     let rawState: string | null = null;
     try {
-      rawState = localStorage.getItem(storageKey);
+      rawState = localStorage.getItem(STORAGE_KEY);
     } catch (error) {
       return;
     }
@@ -379,7 +332,7 @@ export function initPlanner(): void {
       applyAppState(savedState);
     } catch (error) {
       try {
-        localStorage.removeItem(storageKey);
+        localStorage.removeItem(STORAGE_KEY);
       } catch (removeError) {
         // Ignore storage cleanup failures.
       }
