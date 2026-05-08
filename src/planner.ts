@@ -6,46 +6,32 @@ import {
   type Point,
   polygonArea,
 } from "./geometry";
+import { polygonPath, roundedRectPath, visibleWorldBounds as calculateVisibleWorldBounds } from "./canvasRenderer";
 import {
   assertSavedProject,
-  defaultSnapOptions,
   EXPORT_FORMAT,
   type DrawUnit,
-  type GeometrySnapshot,
   type PlannerSettings,
   type PlannerStats,
   type SavedProject,
-  type SnapOptions,
   settingsFromSavedControls,
 } from "./projectState";
 import { clearStoredProject, loadProjectFromStorage, saveProjectToStorage } from "./projectStorage";
+import {
+  createInitialPlannerState,
+  geometrySnapshot as snapshotGeometry,
+  pushUndo as pushUndoSnapshot,
+  redoGeometry,
+  resetHistory,
+  restoreGeometry as restoreGeometrySnapshot,
+  undoGeometry,
+} from "./plannerState";
 import { type Guide, snapPointToContext } from "./snap";
 import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
 
 interface SnapOptionsContext {
   excludeIndex?: number;
   anchor?: Point | null;
-}
-
-interface PlannerState extends GeometrySnapshot {
-  draggingIndex: number;
-  dragSnapshot: GeometrySnapshot | null;
-  drawingSegment: boolean;
-  draftPoint: Point | null;
-  measureInput: string;
-  guides: Guide[];
-  previousDrawUnit: DrawUnit;
-  viewportWidth: number;
-  viewportHeight: number;
-  pixelRatio: number;
-  viewZoom: number;
-  viewPanX: number;
-  viewPanY: number;
-  panning: boolean;
-  lastPanPoint: Point | null;
-  undoStack: GeometrySnapshot[];
-  redoStack: GeometrySnapshot[];
-  snapOptions: SnapOptions;
 }
 
 interface SegmentInsertHit {
@@ -76,33 +62,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   const ctx: CanvasRenderingContext2D = canvasContext;
   let settings = { ...options.settings, snapOptions: { ...options.settings.snapOptions } };
   
-  const state: PlannerState = {
-    points: [
-      { x: 120, y: 130 },
-      { x: 700, y: 130 },
-      { x: 700, y: 500 },
-      { x: 120, y: 500 },
-    ],
-    closed: true,
-    draggingIndex: -1,
-    dragSnapshot: null,
-    drawingSegment: false,
-    draftPoint: null,
-    measureInput: "",
-    guides: [],
-    previousDrawUnit: "cm",
-    viewportWidth: 1120,
-    viewportHeight: 760,
-    pixelRatio: 1,
-    viewZoom: 1,
-    viewPanX: 0,
-    viewPanY: 0,
-    panning: false,
-    lastPanPoint: null,
-    undoStack: [],
-    redoStack: [],
-    snapOptions: defaultSnapOptions(),
-  };
+  const state = createInitialPlannerState();
   
   const basePixelsPerCm = 2;
   const origin = { x: 64, y: 64 };
@@ -173,29 +133,11 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     return result.point;
   }
   
-  function geometrySnapshot(): GeometrySnapshot {
-    return {
-      points: state.points.map((point) => ({ ...point })),
-      closed: state.closed,
-    };
-  }
-  
-  function restoreGeometry(snapshot: GeometrySnapshot): void {
-    state.points = snapshot.points.map((point) => ({ ...point }));
-    state.closed = snapshot.closed;
-    state.draggingIndex = -1;
-    state.dragSnapshot = null;
-    state.drawingSegment = false;
-    state.draftPoint = null;
-    state.measureInput = "";
-    state.guides = [];
-  }
-  
   function serializeAppState(): SavedProject {
     return {
       format: EXPORT_FORMAT,
       version: 1,
-      geometry: geometrySnapshot(),
+      geometry: snapshotGeometry(state),
       controls: {
         drawUnit: drawUnit(),
         gridStep: settings.gridStep,
@@ -223,7 +165,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   function applyAppState(savedState: SavedProject): void {
     assertSavedProject(savedState);
   
-    restoreGeometry(savedState.geometry!);
+    restoreGeometrySnapshot(state, savedState.geometry!);
   
     settings = settingsFromSavedControls(settings, savedState.controls);
     state.snapOptions = settings.snapOptions;
@@ -232,8 +174,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
     state.viewPanX = Number(savedState.view?.panX) || 0;
     state.viewPanY = Number(savedState.view?.panY) || 0;
-    state.undoStack = [];
-    state.redoStack = [];
+    resetHistory(state);
     options.onSettingsChange(settings);
   }
   
@@ -263,36 +204,12 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     }
   }
   
-  function snapshotsEqual(a: GeometrySnapshot | null | undefined, b: GeometrySnapshot | null | undefined): boolean {
-    if (!a || !b || a.closed !== b.closed || a.points.length !== b.points.length) return false;
-    return a.points.every((point, index) => point.x === b.points[index].x && point.y === b.points[index].y);
-  }
-  
-  function pushUndo(beforeSnapshot: GeometrySnapshot): void {
-    const afterSnapshot = geometrySnapshot();
-    if (snapshotsEqual(beforeSnapshot, afterSnapshot)) return;
-    state.undoStack.push(beforeSnapshot);
-    state.redoStack = [];
-  }
-  
   function undo(): void {
-    if (state.undoStack.length === 0) return;
-    const current = geometrySnapshot();
-    const previous = state.undoStack.pop();
-    state.redoStack.push(current);
-    if (!previous) return;
-    restoreGeometry(previous);
-    render();
+    if (undoGeometry(state)) render();
   }
   
   function redo(): void {
-    if (state.redoStack.length === 0) return;
-    const current = geometrySnapshot();
-    const next = state.redoStack.pop();
-    state.undoStack.push(current);
-    if (!next) return;
-    restoreGeometry(next);
-    render();
+    if (redoGeometry(state)) render();
   }
   
   function screenToWorld(point: Point): Point {
@@ -331,9 +248,9 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     const anchor = state.points[state.points.length - 1];
     if (distance(anchor, point) < 2 / state.viewZoom) return false;
   
-    const beforeSnapshot = geometrySnapshot();
+    const beforeSnapshot = snapshotGeometry(state);
     state.points.push({ ...point });
-    pushUndo(beforeSnapshot);
+    pushUndoSnapshot(state, beforeSnapshot);
     state.drawingSegment = true;
     state.draftPoint = { ...point };
     state.measureInput = "";
@@ -343,13 +260,13 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   
   function closeDrawingPolygon(): boolean {
     if (state.points.length < 3 || state.closed) return false;
-    const beforeSnapshot = geometrySnapshot();
+    const beforeSnapshot = snapshotGeometry(state);
     state.closed = true;
     state.drawingSegment = false;
     state.draftPoint = null;
     state.measureInput = "";
     state.guides = [];
-    pushUndo(beforeSnapshot);
+    pushUndoSnapshot(state, beforeSnapshot);
     return true;
   }
   
@@ -393,19 +310,6 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     return best;
   }
   
-  function roundedRectPath(x: number, y: number, width: number, height: number, radius: number): void {
-    const r = Math.min(radius, width / 2, height / 2);
-    ctx.moveTo(x + r, y);
-    ctx.lineTo(x + width - r, y);
-    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
-    ctx.lineTo(x + width, y + height - r);
-    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
-    ctx.lineTo(x + r, y + height);
-    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
-    ctx.lineTo(x, y + r);
-    ctx.quadraticCurveTo(x, y, x + r, y);
-  }
-  
   function calculateTiles(): TileLayoutResult {
     if (!state.closed || state.points.length < 3) {
       return { tiles: [], cut: 0, materialTiles: 0 };
@@ -432,14 +336,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   }
   
   function visibleWorldBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
-    const topLeft = screenToWorld({ x: 0, y: 0 });
-    const bottomRight = screenToWorld({ x: state.viewportWidth, y: state.viewportHeight });
-    return {
-      minX: Math.min(topLeft.x, bottomRight.x),
-      minY: Math.min(topLeft.y, bottomRight.y),
-      maxX: Math.max(topLeft.x, bottomRight.x),
-      maxY: Math.max(topLeft.y, bottomRight.y),
-    };
+    return calculateVisibleWorldBounds(state.viewportWidth, state.viewportHeight, screenToWorld);
   }
   
   function drawGrid(): void {
@@ -538,9 +435,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     ctx.strokeStyle = "#1f3f3a";
     ctx.fillStyle = "rgba(47, 111, 98, 0.10)";
     ctx.beginPath();
-    ctx.moveTo(state.points[0].x, state.points[0].y);
-    state.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
-    if (state.closed && state.points.length > 2) ctx.closePath();
+    polygonPath(ctx, state.points, state.closed);
     ctx.fill();
     ctx.stroke();
   
@@ -587,7 +482,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     ctx.strokeStyle = "rgba(200, 95, 53, 0.45)";
     ctx.lineWidth = 1;
     ctx.beginPath();
-    roundedRectPath(mid.x - width / 2, mid.y - 12, width, 24, 6);
+    roundedRectPath(ctx, mid.x - width / 2, mid.y - 12, width, 24, 6);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = "#9d4525";
@@ -602,16 +497,12 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     const highlightFullTiles = settings.highlightFullTiles;
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(state.points[0].x, state.points[0].y);
-    state.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
-    ctx.closePath();
+    polygonPath(ctx, state.points, true);
     ctx.clip();
   
     tiles.forEach((tile) => {
       ctx.beginPath();
-      ctx.moveTo(tile.points[0].x, tile.points[0].y);
-      tile.points.slice(1).forEach((point) => ctx.lineTo(point.x, point.y));
-      ctx.closePath();
+      polygonPath(ctx, tile.points, true);
       ctx.fillStyle = highlightFullTiles
         ? (tile.full ? "rgba(77, 132, 184, 0.22)" : "rgba(200, 95, 53, 0.24)")
         : "rgba(77, 132, 184, 0.22)";
@@ -643,7 +534,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
           : "rgba(39, 97, 147, 0.65)";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        roundedRectPath(center.x - width / 2, center.y - height / 2, width, height, 5);
+        roundedRectPath(ctx, center.x - width / 2, center.y - height / 2, width, height, 5);
         ctx.fill();
         ctx.stroke();
         ctx.fillStyle = highlightFullTiles
@@ -733,25 +624,25 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     if (nearestIndex >= 0) {
       state.guides = [];
       state.draggingIndex = nearestIndex;
-      state.dragSnapshot = geometrySnapshot();
+      state.dragSnapshot = snapshotGeometry(state);
       canvas.setPointerCapture(event.pointerId);
       render();
       return;
     }
     const segmentHit = segmentAtPoint(point);
     if (segmentHit && !state.drawingSegment) {
-      const beforeSnapshot = geometrySnapshot();
+      const beforeSnapshot = snapshotGeometry(state);
       state.points.splice(segmentHit.insertIndex, 0, snapPoint(segmentHit.point));
-      pushUndo(beforeSnapshot);
+      pushUndoSnapshot(state, beforeSnapshot);
       state.guides = [];
       render();
       return;
     }
     if (!state.closed) {
-      const beforeSnapshot = geometrySnapshot();
+      const beforeSnapshot = snapshotGeometry(state);
       if (state.points.length === 0) {
         state.points.push(snapPoint(point));
-        pushUndo(beforeSnapshot);
+        pushUndoSnapshot(state, beforeSnapshot);
       }
       const anchor = state.points[state.points.length - 1];
       state.drawingSegment = true;
@@ -790,7 +681,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   canvas.addEventListener("pointerup", (event) => {
     const finishedDrag = state.draggingIndex >= 0;
     if (state.draggingIndex >= 0 && state.dragSnapshot) {
-      pushUndo(state.dragSnapshot);
+      pushUndoSnapshot(state, state.dragSnapshot);
     }
     state.draggingIndex = -1;
     state.dragSnapshot = null;
@@ -891,12 +782,12 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   }
 
   function handleRemoveLastPoint(): void {
-    const beforeSnapshot = geometrySnapshot();
+    const beforeSnapshot = snapshotGeometry(state);
     state.points.pop();
     if (state.points.length < 3) {
       state.closed = false;
     }
-    pushUndo(beforeSnapshot);
+    pushUndoSnapshot(state, beforeSnapshot);
     state.draggingIndex = -1;
     state.dragSnapshot = null;
     cancelDrawingSegment();
@@ -904,11 +795,11 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   }
 
   function handleClear(): void {
-    const beforeSnapshot = geometrySnapshot();
+    const beforeSnapshot = snapshotGeometry(state);
     state.points = [];
     state.closed = false;
     cancelDrawingSegment();
-    pushUndo(beforeSnapshot);
+    pushUndoSnapshot(state, beforeSnapshot);
     render();
   }
   
@@ -930,9 +821,9 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     exportProject: serializeAppState,
     importProject(project) {
       assertSavedProject(project);
-      const beforeSnapshot = geometrySnapshot();
+      const beforeSnapshot = snapshotGeometry(state);
       applyAppState(project);
-      pushUndo(beforeSnapshot);
+      pushUndoSnapshot(state, beforeSnapshot);
       render();
     },
     closePolygon: handleClosePolygon,
