@@ -1,48 +1,155 @@
 // The canvas planner is kept imperative for this migration step.
 // It is initialized from React after the DOM controls are rendered.
-// @ts-nocheck
 import {
   closestPointOnSegment,
   distance,
+  type Point,
   polygonArea,
 } from "./geometry";
-import { calculateTileLayout, tileCenter } from "./tileLayout";
+import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
+
+type DrawUnit = "mm" | "cm" | "m";
+type SnapOption = "guides" | "axes" | "grid";
+type GuideAxis = "x" | "y";
+type GuideType = "guide" | "axis";
+
+interface Guide {
+  axis: GuideAxis;
+  value: number;
+  type: GuideType;
+}
+
+interface SnapOptions {
+  guides: boolean;
+  axes: boolean;
+  grid: boolean;
+}
+
+interface SnapOptionsContext {
+  excludeIndex?: number;
+  anchor?: Point | null;
+}
+
+interface GeometrySnapshot {
+  points: Point[];
+  closed: boolean;
+}
+
+interface PlannerState extends GeometrySnapshot {
+  draggingIndex: number;
+  dragSnapshot: GeometrySnapshot | null;
+  drawingSegment: boolean;
+  draftPoint: Point | null;
+  measureInput: string;
+  guides: Guide[];
+  previousDrawUnit: DrawUnit;
+  viewportWidth: number;
+  viewportHeight: number;
+  pixelRatio: number;
+  viewZoom: number;
+  viewPanX: number;
+  viewPanY: number;
+  panning: boolean;
+  lastPanPoint: Point | null;
+  undoStack: GeometrySnapshot[];
+  redoStack: GeometrySnapshot[];
+  snapOptions: SnapOptions;
+}
+
+interface PlannerControls {
+  drawUnit: HTMLSelectElement;
+  gridStep: HTMLInputElement;
+  tileWidth: HTMLInputElement;
+  tileHeight: HTMLInputElement;
+  grout: HTMLInputElement;
+  waste: HTMLInputElement;
+  layout: HTMLSelectElement;
+  rotation: HTMLInputElement;
+  layoutOffsetX: HTMLInputElement;
+  layoutOffsetY: HTMLInputElement;
+  scale: HTMLInputElement;
+  showTileNumbers: HTMLInputElement;
+  highlightFullTiles: HTMLInputElement;
+  area: HTMLElement;
+  tilesRaw: HTMLElement;
+  tilesWithWaste: HTMLElement;
+  cutTiles: HTMLElement;
+  snapModeBtn: HTMLButtonElement;
+  snapModeMenu: HTMLElement;
+  closePolygonBtn: HTMLButtonElement;
+  removeLastPointBtn: HTMLButtonElement;
+  exportBtn: HTMLButtonElement;
+  importBtn: HTMLButtonElement;
+  importFile: HTMLInputElement;
+  clearBtn: HTMLButtonElement;
+}
+
+interface SavedProject {
+  format?: string;
+  version?: number;
+  geometry?: GeometrySnapshot;
+  controls?: Partial<Record<keyof PlannerControls, unknown>> & {
+    snapMode?: "grid" | "guides" | "grid-guides" | "none";
+    snapOptions?: Partial<SnapOptions>;
+    showGuides?: boolean;
+    angleSnap?: boolean;
+  };
+  view?: {
+    zoom?: unknown;
+    panX?: unknown;
+    panY?: unknown;
+  };
+}
+
+interface SegmentInsertHit {
+  insertIndex: number;
+  point: Point;
+  distance: number;
+}
+
+function requireElement<T extends HTMLElement>(selector: string, constructor: { new (): T }): T {
+  const element = document.querySelector(selector);
+  if (!(element instanceof constructor)) {
+    throw new Error(`Required element not found: ${selector}`);
+  }
+  return element;
+}
 
 export function initPlanner(): void {
-  const canvas = document.querySelector<HTMLCanvasElement>("#planner");
-    if (!canvas) throw new Error("Planner canvas not found");
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("2D canvas context not available");
-  
-  const controls = {
-    drawUnit: document.querySelector("#drawUnit"),
-    gridStep: document.querySelector("#gridStep"),
-    tileWidth: document.querySelector("#tileWidth"),
-    tileHeight: document.querySelector("#tileHeight"),
-    grout: document.querySelector("#grout"),
-    waste: document.querySelector("#waste"),
-    layout: document.querySelector("#layout"),
-    rotation: document.querySelector("#rotation"),
-    layoutOffsetX: document.querySelector("#layoutOffsetX"),
-    layoutOffsetY: document.querySelector("#layoutOffsetY"),
-    scale: document.querySelector("#scale"),
-    showTileNumbers: document.querySelector("#showTileNumbers"),
-    highlightFullTiles: document.querySelector("#highlightFullTiles"),
-    area: document.querySelector("#area"),
-    tilesRaw: document.querySelector("#tilesRaw"),
-    tilesWithWaste: document.querySelector("#tilesWithWaste"),
-    cutTiles: document.querySelector("#cutTiles"),
-    snapModeBtn: document.querySelector("#snapModeBtn"),
-    snapModeMenu: document.querySelector("#snapModeMenu"),
-    closePolygonBtn: document.querySelector("#closePolygonBtn"),
-    removeLastPointBtn: document.querySelector("#removeLastPointBtn"),
-    exportBtn: document.querySelector("#exportBtn"),
-    importBtn: document.querySelector("#importBtn"),
-    importFile: document.querySelector("#importFile"),
-    clearBtn: document.querySelector("#clearBtn"),
+  const canvas = requireElement("#planner", HTMLCanvasElement);
+  const canvasContext = canvas.getContext("2d");
+  if (!canvasContext) throw new Error("2D canvas context not available");
+  const ctx: CanvasRenderingContext2D = canvasContext;
+
+  const controls: PlannerControls = {
+    drawUnit: requireElement("#drawUnit", HTMLSelectElement),
+    gridStep: requireElement("#gridStep", HTMLInputElement),
+    tileWidth: requireElement("#tileWidth", HTMLInputElement),
+    tileHeight: requireElement("#tileHeight", HTMLInputElement),
+    grout: requireElement("#grout", HTMLInputElement),
+    waste: requireElement("#waste", HTMLInputElement),
+    layout: requireElement("#layout", HTMLSelectElement),
+    rotation: requireElement("#rotation", HTMLInputElement),
+    layoutOffsetX: requireElement("#layoutOffsetX", HTMLInputElement),
+    layoutOffsetY: requireElement("#layoutOffsetY", HTMLInputElement),
+    scale: requireElement("#scale", HTMLInputElement),
+    showTileNumbers: requireElement("#showTileNumbers", HTMLInputElement),
+    highlightFullTiles: requireElement("#highlightFullTiles", HTMLInputElement),
+    area: requireElement("#area", HTMLElement),
+    tilesRaw: requireElement("#tilesRaw", HTMLElement),
+    tilesWithWaste: requireElement("#tilesWithWaste", HTMLElement),
+    cutTiles: requireElement("#cutTiles", HTMLElement),
+    snapModeBtn: requireElement("#snapModeBtn", HTMLButtonElement),
+    snapModeMenu: requireElement("#snapModeMenu", HTMLElement),
+    closePolygonBtn: requireElement("#closePolygonBtn", HTMLButtonElement),
+    removeLastPointBtn: requireElement("#removeLastPointBtn", HTMLButtonElement),
+    exportBtn: requireElement("#exportBtn", HTMLButtonElement),
+    importBtn: requireElement("#importBtn", HTMLButtonElement),
+    importFile: requireElement("#importFile", HTMLInputElement),
+    clearBtn: requireElement("#clearBtn", HTMLButtonElement),
   };
   
-  const state = {
+  const state: PlannerState = {
     points: [
       { x: 120, y: 130 },
       { x: 700, y: 130 },
@@ -76,12 +183,12 @@ export function initPlanner(): void {
   
   const basePixelsPerCm = 2;
   const origin = { x: 64, y: 64 };
-  const unitToCm = {
+  const unitToCm: Record<DrawUnit, number> = {
     mm: 0.1,
     cm: 1,
     m: 100,
   };
-  const unitLabels = {
+  const unitLabels: Record<DrawUnit, string> = {
     mm: "мм",
     cm: "см",
     m: "м",
@@ -91,27 +198,27 @@ export function initPlanner(): void {
   const exportFormat = "tile-calculator-project";
   let isRestoringState = false;
   
-  function pxPerCm() {
+  function pxPerCm(): number {
     return basePixelsPerCm * Math.max(Number(controls.scale.value) || 1, 0.1);
   }
   
-  function cmToPx(value) {
+  function cmToPx(value: number): number {
     return value * pxPerCm();
   }
   
-  function pxToCm(value) {
+  function pxToCm(value: number): number {
     return value / pxPerCm();
   }
   
-  function drawUnit() {
-    return controls.drawUnit.value;
+  function drawUnit(): DrawUnit {
+    return controls.drawUnit.value as DrawUnit;
   }
   
-  function drawingStepCm() {
+  function drawingStepCm(): number {
     return Math.max(Number(controls.gridStep.value) || 1, 0.01) * unitToCm[drawUnit()];
   }
   
-  function visibleGridStepCm() {
+  function visibleGridStepCm(): number {
     let stepCm = drawingStepCm();
     while (cmToPx(stepCm) * state.viewZoom < 8) {
       stepCm *= 2;
@@ -119,19 +226,19 @@ export function initPlanner(): void {
     return stepCm;
   }
   
-  function formatDrawingLength(cmValue) {
+  function formatDrawingLength(cmValue: number): string {
     const value = cmValue / unitToCm[drawUnit()];
     const rounded = Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2);
     return `${Number(rounded)} ${unitLabels[drawUnit()]}`;
   }
   
-  function parseMeasureInput() {
+  function parseMeasureInput(): number | null {
     const normalized = state.measureInput.replace(",", ".");
     const value = Number(normalized);
     return Number.isFinite(value) && value > 0 ? value : null;
   }
   
-  function snapPoint(point, options = {}) {
+  function snapPoint(point: Point, options: SnapOptionsContext = {}): Point {
     const snapPx = cmToPx(drawingStepCm());
     let snapped = { ...point };
   
@@ -148,14 +255,14 @@ export function initPlanner(): void {
     return snapped;
   }
   
-  function geometrySnapshot() {
+  function geometrySnapshot(): GeometrySnapshot {
     return {
       points: state.points.map((point) => ({ ...point })),
       closed: state.closed,
     };
   }
   
-  function restoreGeometry(snapshot) {
+  function restoreGeometry(snapshot: GeometrySnapshot): void {
     state.points = snapshot.points.map((point) => ({ ...point }));
     state.closed = snapshot.closed;
     state.draggingIndex = -1;
@@ -166,13 +273,13 @@ export function initPlanner(): void {
     state.guides = [];
   }
   
-  function serializeAppState() {
+  function serializeAppState(): SavedProject {
     return {
       format: exportFormat,
       version: 1,
       geometry: geometrySnapshot(),
       controls: {
-        drawUnit: controls.drawUnit.value,
+        drawUnit: drawUnit(),
         gridStep: controls.gridStep.value,
         snapOptions: { ...state.snapOptions },
         tileWidth: controls.tileWidth.value,
@@ -195,7 +302,7 @@ export function initPlanner(): void {
     };
   }
   
-  function applyAppState(savedState) {
+  function applyAppState(savedState: SavedProject): void {
     if (!savedState || typeof savedState !== "object") {
       throw new Error("Invalid project file");
     }
@@ -207,7 +314,7 @@ export function initPlanner(): void {
   
     Object.entries(savedState.controls || {}).forEach(([key, value]) => {
       if (key === "snapMode" || key === "snapOptions") return;
-      const control = controls[key];
+      const control = controls[key as keyof PlannerControls];
       if (!control) return;
       const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
         ? Number(value) * 10
@@ -248,7 +355,7 @@ export function initPlanner(): void {
     syncSnapControls();
   }
   
-  function saveAppState() {
+  function saveAppState(): void {
     if (isRestoringState) return;
     try {
       localStorage.setItem(storageKey, JSON.stringify(serializeAppState()));
@@ -257,8 +364,8 @@ export function initPlanner(): void {
     }
   }
   
-  function restoreAppState() {
-    let rawState = null;
+  function restoreAppState(): void {
+    let rawState: string | null = null;
     try {
       rawState = localStorage.getItem(storageKey);
     } catch (error) {
@@ -281,38 +388,40 @@ export function initPlanner(): void {
     }
   }
   
-  function snapshotsEqual(a, b) {
+  function snapshotsEqual(a: GeometrySnapshot | null | undefined, b: GeometrySnapshot | null | undefined): boolean {
     if (!a || !b || a.closed !== b.closed || a.points.length !== b.points.length) return false;
     return a.points.every((point, index) => point.x === b.points[index].x && point.y === b.points[index].y);
   }
   
-  function pushUndo(beforeSnapshot) {
+  function pushUndo(beforeSnapshot: GeometrySnapshot): void {
     const afterSnapshot = geometrySnapshot();
     if (snapshotsEqual(beforeSnapshot, afterSnapshot)) return;
     state.undoStack.push(beforeSnapshot);
     state.redoStack = [];
   }
   
-  function undo() {
+  function undo(): void {
     if (state.undoStack.length === 0) return;
     const current = geometrySnapshot();
     const previous = state.undoStack.pop();
     state.redoStack.push(current);
+    if (!previous) return;
     restoreGeometry(previous);
     render();
   }
   
-  function redo() {
+  function redo(): void {
     if (state.redoStack.length === 0) return;
     const current = geometrySnapshot();
     const next = state.redoStack.pop();
     state.undoStack.push(current);
+    if (!next) return;
     restoreGeometry(next);
     render();
   }
   
-  function syncSnapControls() {
-    const activeLabels = [];
+  function syncSnapControls(): void {
+    const activeLabels: string[] = [];
     if (state.snapOptions.guides) activeLabels.push("гайды");
     if (state.snapOptions.axes) activeLabels.push("оси");
     if (state.snapOptions.grid) activeLabels.push("сетка");
@@ -320,22 +429,23 @@ export function initPlanner(): void {
     controls.snapModeBtn.textContent = activeLabels.length > 0
       ? `🧲 ${activeLabels.join(" + ")}`
       : "🧲 Выкл";
-    controls.snapModeMenu.querySelectorAll("[data-snap-option]").forEach((input) => {
-      input.checked = Boolean(state.snapOptions[input.dataset.snapOption]);
-    });
+  controls.snapModeMenu.querySelectorAll<HTMLInputElement>("[data-snap-option]").forEach((input) => {
+    const option = input.dataset.snapOption as SnapOption | undefined;
+    input.checked = option ? Boolean(state.snapOptions[option]) : false;
+  });
     if (!state.snapOptions.guides && !state.snapOptions.axes) {
       state.guides = [];
     }
   }
   
-  function screenToWorld(point) {
+  function screenToWorld(point: Point): Point {
     return {
       x: (point.x - state.viewPanX) / state.viewZoom,
       y: (point.y - state.viewPanY) / state.viewZoom,
     };
   }
   
-  function screenPointerPosition(event) {
+  function screenPointerPosition(event: PointerEvent | WheelEvent): Point {
     const rect = canvas.getBoundingClientRect();
     return {
       x: event.clientX - rect.left,
@@ -343,7 +453,7 @@ export function initPlanner(): void {
     };
   }
   
-  function applyGuides(point, options = {}) {
+  function applyGuides(point: Point, options: SnapOptionsContext = {}): Point {
     if (!state.snapOptions.guides && !state.snapOptions.axes) {
       state.guides = [];
       return point;
@@ -351,12 +461,12 @@ export function initPlanner(): void {
   
     const { excludeIndex = -1, anchor = null } = options;
     const guided = { ...point };
-    const candidates = {
+    const candidates: Record<GuideAxis, { distance: number; value: number | null; type: GuideType }> = {
       x: { distance: Infinity, value: null, type: "guide" },
       y: { distance: Infinity, value: null, type: "guide" },
     };
-    let nearestX = { distance: Infinity, value: null };
-    let nearestY = { distance: Infinity, value: null };
+    let nearestX: { distance: number; value: number | null } = { distance: Infinity, value: null };
+    let nearestY: { distance: number; value: number | null } = { distance: Infinity, value: null };
   
     if (state.snapOptions.axes && anchor) {
       candidates.x = { distance: Math.abs(anchor.x - point.x), value: anchor.x, type: "axis" };
@@ -385,7 +495,7 @@ export function initPlanner(): void {
     }
   
     const guideThreshold = guideSnapPx / state.viewZoom;
-    const guides = [];
+  const guides: Guide[] = [];
     if (candidates.x.value !== null && candidates.x.distance <= guideThreshold) {
       guided.x = candidates.x.value;
       guides.push({ axis: "x", value: candidates.x.value, type: candidates.x.type });
@@ -399,11 +509,11 @@ export function initPlanner(): void {
     return guided;
   }
   
-  function snapDrawingPoint(point, anchor = null) {
+  function snapDrawingPoint(point: Point, anchor: Point | null = null): Point {
     return snapPoint(point, { anchor });
   }
   
-  function pointAtTypedLength(anchor, currentPoint) {
+  function pointAtTypedLength(anchor: Point, currentPoint: Point): Point {
     const typedLength = parseMeasureInput();
     if (!typedLength || !anchor) return currentPoint;
     const hasDirection = distance(anchor, currentPoint) > 0;
@@ -415,7 +525,7 @@ export function initPlanner(): void {
     };
   }
   
-  function commitDraftPoint(point = state.draftPoint) {
+  function commitDraftPoint(point: Point | null = state.draftPoint): boolean {
     if (!point || state.closed || state.points.length === 0) return false;
     const anchor = state.points[state.points.length - 1];
     if (distance(anchor, point) < 2 / state.viewZoom) return false;
@@ -430,7 +540,7 @@ export function initPlanner(): void {
     return true;
   }
   
-  function closeDrawingPolygon() {
+  function closeDrawingPolygon(): boolean {
     if (state.points.length < 3 || state.closed) return false;
     const beforeSnapshot = geometrySnapshot();
     state.closed = true;
@@ -442,28 +552,28 @@ export function initPlanner(): void {
     return true;
   }
   
-  function cancelDrawingSegment() {
+  function cancelDrawingSegment(): void {
     state.drawingSegment = false;
     state.draftPoint = null;
     state.measureInput = "";
     state.guides = [];
   }
   
-  function isTextEntryTarget(target) {
+  function isTextEntryTarget(target: EventTarget | null): boolean {
     return target instanceof HTMLInputElement ||
       target instanceof HTMLSelectElement ||
       target instanceof HTMLTextAreaElement;
   }
   
-  function pointerPosition(event) {
+  function pointerPosition(event: PointerEvent): Point {
     return screenToWorld(screenPointerPosition(event));
   }
   
-  function segmentAtPoint(point) {
+  function segmentAtPoint(point: Point): SegmentInsertHit | null {
     if (state.points.length < 2) return null;
     const segmentCount = state.closed ? state.points.length : state.points.length - 1;
     const hitThreshold = 10 / state.viewZoom;
-    let best = null;
+    let best: SegmentInsertHit | null = null;
   
     for (let i = 0; i < segmentCount; i += 1) {
       const start = state.points[i];
@@ -482,7 +592,7 @@ export function initPlanner(): void {
     return best;
   }
   
-  function roundedRectPath(x, y, width, height, radius) {
+  function roundedRectPath(x: number, y: number, width: number, height: number, radius: number): void {
     const r = Math.min(radius, width / 2, height / 2);
     ctx.moveTo(x + r, y);
     ctx.lineTo(x + width - r, y);
@@ -495,14 +605,14 @@ export function initPlanner(): void {
     ctx.quadraticCurveTo(x, y, x + r, y);
   }
   
-  function calculateTiles() {
+  function calculateTiles(): TileLayoutResult {
     if (!state.closed || state.points.length < 3) {
       return { tiles: [], cut: 0, materialTiles: 0 };
     }
   
     const tileWidth = cmToPx((Number(controls.tileWidth.value) + Number(controls.grout.value)) / 10);
     const tileHeight = cmToPx((Number(controls.tileHeight.value) + Number(controls.grout.value)) / 10);
-    const layout = controls.layout.value;
+    const layout = controls.layout.value as LayoutType;
     const baseRotation = Number(controls.rotation.value) * (Math.PI / 180);
     const layoutOffsetX = cmToPx(Number(controls.layoutOffsetX.value) || 0);
     const layoutOffsetY = cmToPx(Number(controls.layoutOffsetY.value) || 0);
@@ -520,7 +630,7 @@ export function initPlanner(): void {
     });
   }
   
-  function visibleWorldBounds() {
+  function visibleWorldBounds(): { minX: number; minY: number; maxX: number; maxY: number } {
     const topLeft = screenToWorld({ x: 0, y: 0 });
     const bottomRight = screenToWorld({ x: state.viewportWidth, y: state.viewportHeight });
     return {
@@ -531,7 +641,7 @@ export function initPlanner(): void {
     };
   }
   
-  function drawGrid() {
+  function drawGrid(): void {
     const visibleStepCm = visibleGridStepCm();
     const minor = cmToPx(visibleStepCm);
     const major = minor * 5;
@@ -558,7 +668,7 @@ export function initPlanner(): void {
     }
   }
   
-  function drawGridScaleLabel() {
+  function drawGridScaleLabel(): void {
     const visibleStepCm = visibleGridStepCm();
     ctx.fillStyle = "#8a8177";
     ctx.font = "12px Inter, system-ui, sans-serif";
@@ -569,7 +679,7 @@ export function initPlanner(): void {
     );
   }
   
-  function drawGuides() {
+  function drawGuides(): void {
     if (state.guides.length === 0) return;
     const bounds = visibleWorldBounds();
   
@@ -591,7 +701,7 @@ export function initPlanner(): void {
     ctx.restore();
   }
   
-  function drawSegmentLabels() {
+  function drawSegmentLabels(): void {
     if (state.points.length < 2) return;
     const segmentCount = state.closed ? state.points.length : state.points.length - 1;
     ctx.font = "12px Inter, system-ui, sans-serif";
@@ -621,7 +731,7 @@ export function initPlanner(): void {
     ctx.textBaseline = "alphabetic";
   }
   
-  function drawPolygon() {
+  function drawPolygon(): void {
     if (state.points.length === 0) return;
     ctx.lineWidth = 2;
     ctx.strokeStyle = "#1f3f3a";
@@ -643,7 +753,7 @@ export function initPlanner(): void {
     drawSegmentLabels();
   }
   
-  function drawDraftSegment() {
+  function drawDraftSegment(): void {
     if (!state.draftPoint || state.points.length === 0 || state.closed) return;
     const anchor = state.points[state.points.length - 1];
   
@@ -686,7 +796,7 @@ export function initPlanner(): void {
     ctx.restore();
   }
   
-  function drawTiles(tiles) {
+  function drawTiles(tiles: TilePlan[]): void {
     if (!state.closed) return;
     const highlightFullTiles = controls.highlightFullTiles.checked;
     ctx.save();
@@ -746,7 +856,7 @@ export function initPlanner(): void {
     ctx.textBaseline = "alphabetic";
   }
   
-  function updateStats(tileResult) {
+  function updateStats(tileResult: TileLayoutResult): void {
     const areaM2 = polygonArea(state.points) / (pxPerCm() ** 2) / 10000;
     const materialTiles = tileResult.materialTiles || 0;
     const raw = Math.ceil(materialTiles);
@@ -757,7 +867,7 @@ export function initPlanner(): void {
     controls.cutTiles.textContent = state.closed ? String(tileResult.cut) : "0";
   }
   
-  function render() {
+  function render(): void {
     ctx.setTransform(state.pixelRatio, 0, 0, state.pixelRatio, 0, 0);
     ctx.clearRect(0, 0, state.viewportWidth, state.viewportHeight);
     ctx.save();
@@ -774,7 +884,7 @@ export function initPlanner(): void {
     saveAppState();
   }
   
-  function resizeCanvas() {
+  function resizeCanvas(): void {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     const width = Math.max(Math.round(rect.width), 1);
@@ -977,20 +1087,25 @@ export function initPlanner(): void {
   });
   
   controls.snapModeMenu.addEventListener("click", (event) => {
-    if (!event.target.closest("[data-snap-option]")) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target?.closest("[data-snap-option]")) return;
     event.stopPropagation();
   });
   
   controls.snapModeMenu.addEventListener("change", (event) => {
-    const input = event.target.closest("[data-snap-option]");
+    const target = event.target instanceof Element ? event.target : null;
+    const input = target?.closest<HTMLInputElement>("[data-snap-option]");
     if (!input) return;
-    state.snapOptions[input.dataset.snapOption] = input.checked;
+    const option = input.dataset.snapOption as SnapOption | undefined;
+    if (!option) return;
+    state.snapOptions[option] = input.checked;
     syncSnapControls();
     render();
   });
   
   document.addEventListener("click", (event) => {
-    if (event.target.closest(".snap-menu")) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest(".snap-menu")) return;
     controls.snapModeBtn.setAttribute("aria-expanded", "false");
     controls.snapModeMenu.hidden = true;
   });
@@ -1059,7 +1174,7 @@ export function initPlanner(): void {
     const currentStepCm = Math.max(Number(controls.gridStep.value) || 1, 0.01) * unitToCm[state.previousDrawUnit];
     state.previousDrawUnit = drawUnit();
     const convertedStep = currentStepCm / unitToCm[state.previousDrawUnit];
-    controls.gridStep.value = Number(convertedStep.toFixed(3));
+    controls.gridStep.value = String(Number(convertedStep.toFixed(3)));
     render();
   });
   
