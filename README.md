@@ -58,6 +58,18 @@ pnpm build
 
 Публиковать нужно содержимое папки `dist`.
 
+GitHub Pages публикуется автоматически при push в `master` через GitHub Actions:
+
+```bash
+pnpm build:pages
+```
+
+Публичный адрес:
+
+```text
+https://literok95-maker.github.io/tile-calculator/
+```
+
 Подходящие хостинги:
 
 - Vercel
