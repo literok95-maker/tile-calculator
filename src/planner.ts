@@ -12,12 +12,14 @@ import {
   EXPORT_FORMAT,
   type DrawUnit,
   type GeometrySnapshot,
-  normalizeSnapOptions,
+  type PlannerSettings,
+  type PlannerStats,
   type SavedProject,
   type SnapOptions,
+  settingsFromSavedControls,
 } from "./projectState";
 import { clearStoredProject, loadProjectFromStorage, saveProjectToStorage } from "./projectStorage";
-import { type Guide, readSnapOption, snapLabel, snapPointToContext } from "./snap";
+import { type Guide, snapPointToContext } from "./snap";
 import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
 
 interface SnapOptionsContext {
@@ -46,81 +48,33 @@ interface PlannerState extends GeometrySnapshot {
   snapOptions: SnapOptions;
 }
 
-interface PlannerControls {
-  drawUnit: HTMLSelectElement;
-  gridStep: HTMLInputElement;
-  tileWidth: HTMLInputElement;
-  tileHeight: HTMLInputElement;
-  grout: HTMLInputElement;
-  waste: HTMLInputElement;
-  layout: HTMLSelectElement;
-  rotation: HTMLInputElement;
-  layoutOffsetX: HTMLInputElement;
-  layoutOffsetY: HTMLInputElement;
-  scale: HTMLInputElement;
-  showTileNumbers: HTMLInputElement;
-  highlightFullTiles: HTMLInputElement;
-  area: HTMLElement;
-  tilesRaw: HTMLElement;
-  tilesWithWaste: HTMLElement;
-  cutTiles: HTMLElement;
-  snapModeBtn: HTMLButtonElement;
-  snapModeMenu: HTMLElement;
-  closePolygonBtn: HTMLButtonElement;
-  removeLastPointBtn: HTMLButtonElement;
-  exportBtn: HTMLButtonElement;
-  importBtn: HTMLButtonElement;
-  importFile: HTMLInputElement;
-  clearBtn: HTMLButtonElement;
-}
-
 interface SegmentInsertHit {
   insertIndex: number;
   point: Point;
   distance: number;
 }
 
-function requireElement<T extends HTMLElement>(selector: string, constructor: { new (): T }): T {
-  const element = document.querySelector(selector);
-  if (!(element instanceof constructor)) {
-    throw new Error(`Required element not found: ${selector}`);
-  }
-  return element;
+export interface PlannerApi {
+  setSettings(settings: PlannerSettings): void;
+  exportProject(): SavedProject;
+  importProject(project: unknown): void;
+  closePolygon(): void;
+  removeLastPoint(): void;
+  clear(): void;
+  destroy(): void;
 }
 
-export function initPlanner(): void {
-  const canvas = requireElement("#planner", HTMLCanvasElement);
+export interface PlannerInitOptions {
+  settings: PlannerSettings;
+  onSettingsChange(settings: PlannerSettings): void;
+  onStatsChange(stats: PlannerStats): void;
+}
+
+export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptions): PlannerApi {
   const canvasContext = canvas.getContext("2d");
   if (!canvasContext) throw new Error("2D canvas context not available");
   const ctx: CanvasRenderingContext2D = canvasContext;
-
-  const controls: PlannerControls = {
-    drawUnit: requireElement("#drawUnit", HTMLSelectElement),
-    gridStep: requireElement("#gridStep", HTMLInputElement),
-    tileWidth: requireElement("#tileWidth", HTMLInputElement),
-    tileHeight: requireElement("#tileHeight", HTMLInputElement),
-    grout: requireElement("#grout", HTMLInputElement),
-    waste: requireElement("#waste", HTMLInputElement),
-    layout: requireElement("#layout", HTMLSelectElement),
-    rotation: requireElement("#rotation", HTMLInputElement),
-    layoutOffsetX: requireElement("#layoutOffsetX", HTMLInputElement),
-    layoutOffsetY: requireElement("#layoutOffsetY", HTMLInputElement),
-    scale: requireElement("#scale", HTMLInputElement),
-    showTileNumbers: requireElement("#showTileNumbers", HTMLInputElement),
-    highlightFullTiles: requireElement("#highlightFullTiles", HTMLInputElement),
-    area: requireElement("#area", HTMLElement),
-    tilesRaw: requireElement("#tilesRaw", HTMLElement),
-    tilesWithWaste: requireElement("#tilesWithWaste", HTMLElement),
-    cutTiles: requireElement("#cutTiles", HTMLElement),
-    snapModeBtn: requireElement("#snapModeBtn", HTMLButtonElement),
-    snapModeMenu: requireElement("#snapModeMenu", HTMLElement),
-    closePolygonBtn: requireElement("#closePolygonBtn", HTMLButtonElement),
-    removeLastPointBtn: requireElement("#removeLastPointBtn", HTMLButtonElement),
-    exportBtn: requireElement("#exportBtn", HTMLButtonElement),
-    importBtn: requireElement("#importBtn", HTMLButtonElement),
-    importFile: requireElement("#importFile", HTMLInputElement),
-    clearBtn: requireElement("#clearBtn", HTMLButtonElement),
-  };
+  let settings = { ...options.settings, snapOptions: { ...options.settings.snapOptions } };
   
   const state: PlannerState = {
     points: [
@@ -166,7 +120,7 @@ export function initPlanner(): void {
   let isRestoringState = false;
   
   function pxPerCm(): number {
-    return basePixelsPerCm * Math.max(Number(controls.scale.value) || 1, 0.1);
+    return basePixelsPerCm * Math.max(Number(settings.scale) || 1, 0.1);
   }
   
   function cmToPx(value: number): number {
@@ -178,11 +132,11 @@ export function initPlanner(): void {
   }
   
   function drawUnit(): DrawUnit {
-    return controls.drawUnit.value as DrawUnit;
+    return settings.drawUnit;
   }
   
   function drawingStepCm(): number {
-    return Math.max(Number(controls.gridStep.value) || 1, 0.01) * unitToCm[drawUnit()];
+    return Math.max(Number(settings.gridStep) || 1, 0.01) * unitToCm[drawUnit()];
   }
   
   function visibleGridStepCm(): number {
@@ -244,19 +198,19 @@ export function initPlanner(): void {
       geometry: geometrySnapshot(),
       controls: {
         drawUnit: drawUnit(),
-        gridStep: controls.gridStep.value,
+        gridStep: settings.gridStep,
         snapOptions: { ...state.snapOptions },
-        tileWidth: controls.tileWidth.value,
-        tileHeight: controls.tileHeight.value,
-        grout: controls.grout.value,
-        waste: controls.waste.value,
-        layout: controls.layout.value,
-        rotation: controls.rotation.value,
-        layoutOffsetX: controls.layoutOffsetX.value,
-        layoutOffsetY: controls.layoutOffsetY.value,
-        scale: controls.scale.value,
-        showTileNumbers: controls.showTileNumbers.checked,
-        highlightFullTiles: controls.highlightFullTiles.checked,
+        tileWidth: settings.tileWidth,
+        tileHeight: settings.tileHeight,
+        grout: settings.grout,
+        waste: settings.waste,
+        layout: settings.layout,
+        rotation: settings.rotation,
+        layoutOffsetX: settings.layoutOffsetX,
+        layoutOffsetY: settings.layoutOffsetY,
+        scale: settings.scale,
+        showTileNumbers: settings.showTileNumbers,
+        highlightFullTiles: settings.highlightFullTiles,
       },
       view: {
         zoom: state.viewZoom,
@@ -271,21 +225,8 @@ export function initPlanner(): void {
   
     restoreGeometry(savedState.geometry!);
   
-    Object.entries(savedState.controls || {}).forEach(([key, value]) => {
-      if (key === "snapMode" || key === "snapOptions") return;
-      const control = controls[key as keyof PlannerControls];
-      if (!control) return;
-      const migratedValue = (key === "tileWidth" || key === "tileHeight") && Number(value) < 100
-        ? Number(value) * 10
-        : value;
-      if (control instanceof HTMLInputElement && control.type === "checkbox") {
-        control.checked = Boolean(migratedValue);
-      } else if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
-        control.value = String(migratedValue);
-      }
-    });
-  
-    state.snapOptions = normalizeSnapOptions(savedState.controls);
+    settings = settingsFromSavedControls(settings, savedState.controls);
+    state.snapOptions = settings.snapOptions;
   
     state.previousDrawUnit = drawUnit();
     state.viewZoom = Math.min(Math.max(Number(savedState.view?.zoom) || 1, 0.25), 6);
@@ -293,7 +234,7 @@ export function initPlanner(): void {
     state.viewPanY = Number(savedState.view?.panY) || 0;
     state.undoStack = [];
     state.redoStack = [];
-    syncSnapControls();
+    options.onSettingsChange(settings);
   }
   
   function saveAppState(): void {
@@ -352,17 +293,6 @@ export function initPlanner(): void {
     if (!next) return;
     restoreGeometry(next);
     render();
-  }
-  
-  function syncSnapControls(): void {
-    controls.snapModeBtn.textContent = snapLabel(state.snapOptions);
-    controls.snapModeMenu.querySelectorAll<HTMLInputElement>("[data-snap-option]").forEach((input) => {
-      const option = readSnapOption(input.dataset.snapOption);
-      input.checked = option ? Boolean(state.snapOptions[option]) : false;
-    });
-    if (!state.snapOptions.guides && !state.snapOptions.axes) {
-      state.guides = [];
-    }
   }
   
   function screenToWorld(point: Point): Point {
@@ -481,12 +411,12 @@ export function initPlanner(): void {
       return { tiles: [], cut: 0, materialTiles: 0 };
     }
   
-    const tileWidth = cmToPx((Number(controls.tileWidth.value) + Number(controls.grout.value)) / 10);
-    const tileHeight = cmToPx((Number(controls.tileHeight.value) + Number(controls.grout.value)) / 10);
-    const layout = controls.layout.value as LayoutType;
-    const baseRotation = Number(controls.rotation.value) * (Math.PI / 180);
-    const layoutOffsetX = cmToPx(Number(controls.layoutOffsetX.value) || 0);
-    const layoutOffsetY = cmToPx(Number(controls.layoutOffsetY.value) || 0);
+    const tileWidth = cmToPx((Number(settings.tileWidth) + Number(settings.grout)) / 10);
+    const tileHeight = cmToPx((Number(settings.tileHeight) + Number(settings.grout)) / 10);
+    const layout = settings.layout as LayoutType;
+    const baseRotation = Number(settings.rotation) * (Math.PI / 180);
+    const layoutOffsetX = cmToPx(Number(settings.layoutOffsetX) || 0);
+    const layoutOffsetY = cmToPx(Number(settings.layoutOffsetY) || 0);
     return calculateTileLayout({
       room: state.points,
       origin,
@@ -669,7 +599,7 @@ export function initPlanner(): void {
   
   function drawTiles(tiles: TilePlan[]): void {
     if (!state.closed) return;
-    const highlightFullTiles = controls.highlightFullTiles.checked;
+    const highlightFullTiles = settings.highlightFullTiles;
     ctx.save();
     ctx.beginPath();
     ctx.moveTo(state.points[0].x, state.points[0].y);
@@ -694,7 +624,7 @@ export function initPlanner(): void {
     });
     ctx.restore();
   
-    if (controls.showTileNumbers.checked) {
+  if (settings.showTileNumbers) {
       tiles.forEach((tile) => {
         if (!tile.label) return;
         const center = tile.labelPoint || tileCenter(tile);
@@ -731,11 +661,13 @@ export function initPlanner(): void {
     const areaM2 = polygonArea(state.points) / (pxPerCm() ** 2) / 10000;
     const materialTiles = tileResult.materialTiles || 0;
     const raw = Math.ceil(materialTiles);
-    const waste = Number(controls.waste.value) / 100;
-    controls.area.textContent = state.closed ? areaM2.toFixed(2) : "0";
-    controls.tilesRaw.textContent = state.closed ? String(raw) : "0";
-    controls.tilesWithWaste.textContent = state.closed ? String(Math.ceil(materialTiles * (1 + waste))) : "0";
-    controls.cutTiles.textContent = state.closed ? String(tileResult.cut) : "0";
+    const waste = Number(settings.waste) / 100;
+    options.onStatsChange({
+      area: state.closed ? areaM2.toFixed(2) : "0",
+      tilesRaw: state.closed ? String(raw) : "0",
+      tilesWithWaste: state.closed ? String(Math.ceil(materialTiles * (1 + waste))) : "0",
+      cutTiles: state.closed ? String(tileResult.cut) : "0",
+    });
   }
   
   function render(): void {
@@ -951,44 +883,14 @@ export function initPlanner(): void {
     }
   });
   
-  controls.snapModeBtn.addEventListener("click", () => {
-    const expanded = controls.snapModeBtn.getAttribute("aria-expanded") === "true";
-    controls.snapModeBtn.setAttribute("aria-expanded", String(!expanded));
-    controls.snapModeMenu.hidden = expanded;
-  });
-  
-  controls.snapModeMenu.addEventListener("click", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target?.closest("[data-snap-option]")) return;
-    event.stopPropagation();
-  });
-  
-  controls.snapModeMenu.addEventListener("change", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    const input = target?.closest<HTMLInputElement>("[data-snap-option]");
-    if (!input) return;
-    const option = readSnapOption(input.dataset.snapOption);
-    if (!option) return;
-    state.snapOptions[option] = input.checked;
-    syncSnapControls();
-    render();
-  });
-  
-  document.addEventListener("click", (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest(".snap-menu")) return;
-    controls.snapModeBtn.setAttribute("aria-expanded", "false");
-    controls.snapModeMenu.hidden = true;
-  });
-  
-  controls.closePolygonBtn.addEventListener("click", () => {
+  function handleClosePolygon(): void {
     if (state.points.length >= 3) {
       closeDrawingPolygon();
     }
     render();
-  });
-  
-  controls.removeLastPointBtn.addEventListener("click", () => {
+  }
+
+  function handleRemoveLastPoint(): void {
     const beforeSnapshot = geometrySnapshot();
     state.points.pop();
     if (state.points.length < 3) {
@@ -999,65 +901,45 @@ export function initPlanner(): void {
     state.dragSnapshot = null;
     cancelDrawingSegment();
     render();
-  });
-  
-  controls.exportBtn.addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(serializeAppState(), null, 2)], { type: "application/json" });
-    const link = document.createElement("a");
-    const date = new Date().toISOString().slice(0, 10);
-    link.href = URL.createObjectURL(blob);
-    link.download = `tile-plan-${date}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-  });
-  
-  controls.importBtn.addEventListener("click", () => {
-    controls.importFile.click();
-  });
-  
-  controls.importFile.addEventListener("change", async () => {
-    const file = controls.importFile.files?.[0];
-    if (!file) return;
-  
-    try {
-      const importedState = JSON.parse(await file.text());
-      const beforeSnapshot = geometrySnapshot();
-      applyAppState(importedState);
-      pushUndo(beforeSnapshot);
-      render();
-    } catch (error) {
-      alert("Не удалось импортировать чертеж. Проверьте, что выбран корректный JSON-файл.");
-    } finally {
-      controls.importFile.value = "";
-    }
-  });
-  
-  controls.clearBtn.addEventListener("click", () => {
+  }
+
+  function handleClear(): void {
     const beforeSnapshot = geometrySnapshot();
     state.points = [];
     state.closed = false;
     cancelDrawingSegment();
     pushUndo(beforeSnapshot);
     render();
-  });
-  
-  controls.drawUnit.addEventListener("change", () => {
-    const currentStepCm = Math.max(Number(controls.gridStep.value) || 1, 0.01) * unitToCm[state.previousDrawUnit];
-    state.previousDrawUnit = drawUnit();
-    const convertedStep = currentStepCm / unitToCm[state.previousDrawUnit];
-    controls.gridStep.value = String(Number(convertedStep.toFixed(3)));
-    render();
-  });
-  
-  Object.values(controls).forEach((control) => {
-    if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
-      control.addEventListener("input", render);
-    }
-  });
+  }
   
   restoreAppState();
-  syncSnapControls();
-  new ResizeObserver(resizeCanvas).observe(canvas);
+  const resizeObserver = new ResizeObserver(resizeCanvas);
+  resizeObserver.observe(canvas);
   resizeCanvas();
 
+  return {
+    setSettings(nextSettings) {
+      settings = { ...nextSettings, snapOptions: { ...nextSettings.snapOptions } };
+      state.snapOptions = { ...nextSettings.snapOptions };
+      state.previousDrawUnit = settings.drawUnit;
+      if (!state.snapOptions.guides && !state.snapOptions.axes) {
+        state.guides = [];
+      }
+      render();
+    },
+    exportProject: serializeAppState,
+    importProject(project) {
+      assertSavedProject(project);
+      const beforeSnapshot = geometrySnapshot();
+      applyAppState(project);
+      pushUndo(beforeSnapshot);
+      render();
+    },
+    closePolygon: handleClosePolygon,
+    removeLastPoint: handleRemoveLastPoint,
+    clear: handleClear,
+    destroy() {
+      resizeObserver.disconnect();
+    },
+  };
 }
