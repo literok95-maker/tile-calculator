@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://literok95-maker.github.io/tile-calculator/sitemap.xml
