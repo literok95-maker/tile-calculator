@@ -1,0 +1,16 @@
+{
+  "name": "Расчет плитки на пол",
+  "short_name": "Плитка",
+  "description": "Калькулятор плитки для черчения помещения и расчета раскладки.",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#eef1f4",
+  "theme_color": "#2f6f62",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "64x64",
+      "type": "image/svg+xml"
+    }
+  ]
+}
