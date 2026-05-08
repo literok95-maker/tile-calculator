@@ -26,6 +26,7 @@ import {
   restoreGeometry as restoreGeometrySnapshot,
   undoGeometry,
 } from "./plannerState";
+import { bindPlannerEvents } from "./plannerEvents";
 import { type Guide, snapPointToContext } from "./snap";
 import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
 
@@ -591,7 +592,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     render();
   }
   
-  canvas.addEventListener("pointerdown", (event) => {
+  function handlePointerDown(event: PointerEvent): void {
     canvas.focus();
   
     if (event.button === 1) {
@@ -650,9 +651,9 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       state.measureInput = "";
       render();
     }
-  });
+  }
   
-  canvas.addEventListener("pointermove", (event) => {
+  function handlePointerMove(event: PointerEvent): void {
     if (state.panning && state.lastPanPoint) {
       const current = screenPointerPosition(event);
       state.viewPanX += current.x - state.lastPanPoint.x;
@@ -676,9 +677,9 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       anchor: dragAnchor,
     });
     render();
-  });
+  }
   
-  canvas.addEventListener("pointerup", (event) => {
+  function handlePointerUp(event: PointerEvent): void {
     const finishedDrag = state.draggingIndex >= 0;
     if (state.draggingIndex >= 0 && state.dragSnapshot) {
       pushUndoSnapshot(state, state.dragSnapshot);
@@ -694,9 +695,9 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       canvas.releasePointerCapture(event.pointerId);
     }
     render();
-  });
+  }
   
-  canvas.addEventListener("wheel", (event) => {
+  function handleWheel(event: WheelEvent): void {
     event.preventDefault();
     const screenPoint = screenPointerPosition(event);
     const worldPoint = screenToWorld(screenPoint);
@@ -707,15 +708,15 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     state.viewPanX = screenPoint.x - worldPoint.x * nextZoom;
     state.viewPanY = screenPoint.y - worldPoint.y * nextZoom;
     render();
-  }, { passive: false });
+  }
   
-  canvas.addEventListener("auxclick", (event) => {
+  function handleAuxClick(event: MouseEvent): void {
     if (event.button === 1) {
       event.preventDefault();
     }
-  });
+  }
   
-  window.addEventListener("keydown", (event) => {
+  function handleKeyDown(event: KeyboardEvent): void {
     const key = event.key.toLowerCase();
     if ((event.ctrlKey || event.metaKey) && key === "z") {
       event.preventDefault();
@@ -772,7 +773,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       }
       render();
     }
-  });
+  }
   
   function handleClosePolygon(): void {
     if (state.points.length >= 3) {
@@ -804,6 +805,14 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   }
   
   restoreAppState();
+  const unbindEvents = bindPlannerEvents(canvas, {
+    pointerDown: handlePointerDown,
+    pointerMove: handlePointerMove,
+    pointerUp: handlePointerUp,
+    wheel: handleWheel,
+    auxClick: handleAuxClick,
+    keyDown: handleKeyDown,
+  });
   const resizeObserver = new ResizeObserver(resizeCanvas);
   resizeObserver.observe(canvas);
   resizeCanvas();
@@ -830,6 +839,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     removeLastPoint: handleRemoveLastPoint,
     clear: handleClear,
     destroy() {
+      unbindEvents();
       resizeObserver.disconnect();
     },
   };
