@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
-import { Download, Eraser, Magnet, Trash2, Upload, Waypoints } from "lucide-react";
+import { Download, Eraser, Hand, Magnet, Upload, Waypoints, ZoomIn, ZoomOut } from "lucide-react";
 import { type PlannerApi, initPlanner } from "./planner";
 import {
   defaultPlannerSettings,
@@ -34,6 +34,7 @@ export default function App() {
   const initialSettingsRef = useRef(settings);
   const [stats, setStats] = useState<PlannerStats>(defaultStats);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
+  const [panToolActive, setPanToolActive] = useState(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -47,6 +48,7 @@ export default function App() {
       settings: initialSettingsRef.current,
       onSettingsChange: (nextSettings) => setSettings(nextSettings),
       onStatsChange: (nextStats) => setStats(nextStats),
+      onPanToolChange: (active) => setPanToolActive(active),
     });
 
     return () => {
@@ -155,9 +157,6 @@ export default function App() {
             <button className="icon-button" type="button" title="Замкнуть контур" aria-label="Замкнуть контур" onClick={() => plannerRef.current?.closePolygon()}>
               <Waypoints size={iconSize} aria-hidden="true" />
             </button>
-            <button className="icon-button" type="button" title="Удалить последнюю точку" aria-label="Удалить последнюю точку" onClick={() => plannerRef.current?.removeLastPoint()}>
-              <Trash2 size={iconSize} aria-hidden="true" />
-            </button>
             <button className="icon-button" type="button" title="Экспортировать чертеж" aria-label="Экспортировать чертеж" onClick={exportProject}>
               <Download size={iconSize} aria-hidden="true" />
             </button>
@@ -171,6 +170,24 @@ export default function App() {
           </div>
         </div>
         <div className="canvas-wrap">
+          <div className="canvas-controls" aria-label="Управление видом">
+            <button className="icon-button" type="button" title="Увеличить масштаб" aria-label="Увеличить масштаб" onClick={() => plannerRef.current?.zoomIn()}>
+              <ZoomIn size={iconSize} aria-hidden="true" />
+            </button>
+            <button className="icon-button" type="button" title="Уменьшить масштаб" aria-label="Уменьшить масштаб" onClick={() => plannerRef.current?.zoomOut()}>
+              <ZoomOut size={iconSize} aria-hidden="true" />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              title={panToolActive ? "Выключить руку" : "Рука для перетаскивания"}
+              aria-label={panToolActive ? "Выключить руку" : "Рука для перетаскивания"}
+              aria-pressed={panToolActive}
+              onClick={() => plannerRef.current?.setPanToolEnabled(!panToolActive)}
+            >
+              <Hand size={iconSize} aria-hidden="true" />
+            </button>
+          </div>
           <canvas ref={canvasRef} width="1120" height="760" tabIndex={0} aria-label="Редактор плана" />
         </div>
       </section>
