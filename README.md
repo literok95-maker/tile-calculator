@@ -1,5 +1,7 @@
 # Tile Floor Calculator
 
+[![Quality checks](https://github.com/literok95-maker/tile-calculator/actions/workflows/pr-checks.yml/badge.svg)](https://github.com/literok95-maker/tile-calculator/actions/workflows/pr-checks.yml)
+
 Веб-инструмент для черчения помещения, подбора раскладки плитки и оценки количества целых плиток и обрезков.
 
 ## Возможности
@@ -44,6 +46,7 @@ http://127.0.0.1:5173/
 ## Проверки
 
 ```bash
+pnpm lint
 pnpm test
 pnpm build
 ```

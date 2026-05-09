@@ -46,6 +46,53 @@ describe("tile layout", () => {
     expect(result.tiles.map((tile) => tile.label)).toEqual(["1", "2.1"]);
   });
 
+  it("returns an empty layout for open or invalid rooms", () => {
+    const result = calculateTileLayout({
+      ...baseInput,
+      room: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+      ],
+    });
+
+    expect(result).toEqual({ tiles: [], cut: 0, materialTiles: 0 });
+  });
+
+  it("offsets every other row for brick layout", () => {
+    const result = calculateTileLayout({
+      ...baseInput,
+      room: [
+        { x: 0, y: 10 },
+        { x: 20, y: 10 },
+        { x: 20, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      layout: "brick",
+    });
+
+    expect(result.tiles.filter((tile) => tile.full)).toHaveLength(1);
+    expect(result.cut).toBe(2);
+    expect(result.tiles.map((tile) => tile.label)).toEqual(["2.1", "1", "2.2"]);
+    expect(result.materialTiles).toBe(2);
+  });
+
+  it("applies diagonal rotation to straight tile generation", () => {
+    const result = calculateTileLayout({
+      ...baseInput,
+      room: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ],
+      layout: "diagonal",
+    });
+
+    expect(result.tiles.length).toBeGreaterThan(0);
+    expect(result.materialTiles).toBeGreaterThan(0);
+    expect(result.cut).toBeGreaterThan(0);
+  });
+
   it("builds herringbone tiles with labels", () => {
     const result = calculateTileLayout({
       ...baseInput,

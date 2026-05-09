@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { assertSavedProject, defaultSnapOptions, normalizeSnapOptions } from "./projectState";
+import {
+  assertSavedProject,
+  defaultPlannerSettings,
+  defaultSnapOptions,
+  normalizeSnapOptions,
+  settingsFromSavedControls,
+} from "./projectState";
 
 describe("project state", () => {
   it("normalizes current snap options", () => {
@@ -27,5 +33,41 @@ describe("project state", () => {
   it("validates imported project shape", () => {
     expect(() => assertSavedProject({ geometry: { points: [], closed: false } })).not.toThrow();
     expect(() => assertSavedProject({})).toThrow("Project file does not contain geometry");
+  });
+
+  it("migrates saved controls without overwriting invalid enum values", () => {
+    const current = defaultPlannerSettings();
+    const migrated = settingsFromSavedControls(current, {
+      drawUnit: "inch",
+      layout: "spiral",
+      gridStep: 25,
+      tileWidth: 60,
+      tileHeight: 12,
+      showTileNumbers: 0,
+      highlightFullTiles: 1,
+      snapOptions: { guides: true, axes: false, grid: true },
+    });
+
+    expect(migrated.drawUnit).toBe(current.drawUnit);
+    expect(migrated.layout).toBe(current.layout);
+    expect(migrated.gridStep).toBe("25");
+    expect(migrated.tileWidth).toBe("600");
+    expect(migrated.tileHeight).toBe("120");
+    expect(migrated.showTileNumbers).toBe(false);
+    expect(migrated.highlightFullTiles).toBe(true);
+    expect(migrated.snapOptions).toEqual({ guides: true, axes: false, grid: true });
+  });
+
+  it("keeps current settings and default snap options when saved controls are missing", () => {
+    const current = {
+      ...defaultPlannerSettings(),
+      gridStep: "5",
+      snapOptions: { guides: true, axes: true, grid: false },
+    };
+
+    expect(settingsFromSavedControls(current, undefined)).toEqual({
+      ...current,
+      snapOptions: defaultSnapOptions(),
+    });
   });
 });

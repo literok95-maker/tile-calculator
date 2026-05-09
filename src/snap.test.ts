@@ -56,6 +56,59 @@ describe("snap", () => {
     expect(result.guides).toEqual([{ axis: "y", value: 10, type: "axis" }]);
   });
 
+  it("prefers closer guide over anchor axis", () => {
+    const result = snapPointToContext({
+      x: 41,
+      y: 28,
+    }, {
+      points,
+      snapOptions: { guides: true, axes: true, grid: false },
+      gridStepPx: 10,
+      viewZoom: 1,
+      guideSnapPx: 8,
+      anchor: { x: 35, y: 35 },
+    });
+
+    expect(result.point).toEqual({ x: 40, y: 30 });
+    expect(result.guides).toEqual([
+      { axis: "x", value: 40, type: "guide" },
+      { axis: "y", value: 30, type: "guide" },
+    ]);
+  });
+
+  it("does not snap guides outside the zoom-adjusted threshold", () => {
+    const result = snapPointToContext({
+      x: 30,
+      y: 36,
+    }, {
+      points,
+      snapOptions: { guides: true, axes: false, grid: false },
+      gridStepPx: 10,
+      viewZoom: 2,
+      guideSnapPx: 8,
+    });
+
+    expect(result.point).toEqual({ x: 30, y: 36 });
+    expect(result.guides).toEqual([]);
+  });
+
+  it("excludes the dragged point when matching guides", () => {
+    const result = snapPointToContext({
+      x: 12,
+      y: 12,
+    }, {
+      points,
+      snapOptions: { guides: true, axes: false, grid: false },
+      gridStepPx: 10,
+      viewZoom: 1,
+      guideSnapPx: 8,
+      excludeIndex: 0,
+    });
+
+    expect(result.point).toEqual({ x: 12, y: 12 });
+    expect(result.guides).toEqual([]);
+  });
+
   it("formats snap labels and reads options", () => {
     expect(snapLabel({ guides: false, axes: false, grid: false })).toBe("🧲 Выкл");
     expect(snapLabel({ guides: true, axes: true, grid: true })).toBe("🧲 гайды + оси + сетка");
