@@ -28,6 +28,7 @@ export default function App() {
   const plannerRef = useRef<PlannerApi | null>(null);
   const [settings, setSettings] = useState<PlannerSettings>(() => defaultPlannerSettings());
   const settingsRef = useRef(settings);
+  const initialSettingsRef = useRef(settings);
   const [stats, setStats] = useState<PlannerStats>(defaultStats);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
 
@@ -40,7 +41,7 @@ export default function App() {
     if (!canvasRef.current) return;
 
     plannerRef.current = initPlanner(canvasRef.current, {
-      settings,
+      settings: initialSettingsRef.current,
       onSettingsChange: (nextSettings) => setSettings(nextSettings),
       onStatsChange: (nextStats) => setStats(nextStats),
     });
@@ -104,7 +105,7 @@ export default function App() {
     try {
       const importedState = JSON.parse(await file.text());
       plannerRef.current?.importProject(importedState);
-    } catch (error) {
+    } catch {
       alert("Не удалось импортировать чертеж. Проверьте, что выбран корректный JSON-файл.");
     } finally {
       if (importFileRef.current) {

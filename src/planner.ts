@@ -27,7 +27,7 @@ import {
   undoGeometry,
 } from "./plannerState";
 import { bindPlannerEvents } from "./plannerEvents";
-import { type Guide, snapPointToContext } from "./snap";
+import { snapPointToContext } from "./snap";
 import { calculateTileLayout, type LayoutType, type TileLayoutResult, type TilePlan, tileCenter } from "./tileLayout";
 
 interface SnapOptionsContext {
@@ -183,7 +183,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     if (isRestoringState) return;
     try {
       saveProjectToStorage(serializeAppState());
-    } catch (error) {
+    } catch {
       // Storage can be unavailable in restricted browser modes.
     }
   }
@@ -194,10 +194,10 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       if (!savedState) return;
       isRestoringState = true;
       applyAppState(savedState);
-    } catch (error) {
+    } catch {
       try {
         clearStoredProject();
-      } catch (removeError) {
+      } catch {
         // Ignore storage cleanup failures.
       }
     } finally {
