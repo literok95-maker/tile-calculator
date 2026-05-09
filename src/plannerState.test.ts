@@ -36,6 +36,50 @@ describe("planner state", () => {
     expect(state.points).toHaveLength(before.points.length + 1);
   });
 
+  it("undoes and redoes point deletion", () => {
+    const state = createInitialPlannerState();
+    const before = geometrySnapshot(state);
+    const removedPoint = state.points[1];
+
+    state.selectedPointIndex = 1;
+    state.points.splice(1, 1);
+    pushUndo(state, before);
+
+    expect(state.points).not.toContainEqual(removedPoint);
+    expect(undoGeometry(state)).toBe(true);
+    expect(state.points).toEqual(before.points);
+    expect(state.closed).toBe(before.closed);
+    expect(state.selectedPointIndex).toBe(-1);
+
+    expect(redoGeometry(state)).toBe(true);
+    expect(state.points).not.toContainEqual(removedPoint);
+    expect(state.points).toHaveLength(before.points.length - 1);
+  });
+
+  it("undoes and redoes explicit point movement", () => {
+    const state = createInitialPlannerState();
+    const before = geometrySnapshot(state);
+    const movedPoint = { x: 820, y: 240 };
+
+    state.selectedPointIndex = 2;
+    state.draggingIndex = 2;
+    state.dragSnapshot = before;
+    state.dragOffset = { x: 12, y: -8 };
+    state.points[2] = movedPoint;
+    pushUndo(state, state.dragSnapshot);
+
+    expect(state.points[2]).toEqual(movedPoint);
+    expect(undoGeometry(state)).toBe(true);
+    expect(state.points).toEqual(before.points);
+    expect(state.draggingIndex).toBe(-1);
+    expect(state.dragSnapshot).toBeNull();
+    expect(state.dragOffset).toBeNull();
+    expect(state.selectedPointIndex).toBe(-1);
+
+    expect(redoGeometry(state)).toBe(true);
+    expect(state.points[2]).toEqual(movedPoint);
+  });
+
   it("reports false when undo and redo history is empty", () => {
     const state = createInitialPlannerState();
 

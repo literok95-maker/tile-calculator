@@ -1,5 +1,5 @@
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
-import { Download, Eraser, Hand, Magnet, Upload, Waypoints, ZoomIn, ZoomOut } from "lucide-react";
+import { Download, Eraser, Hand, Magnet, Ruler, Upload, Waypoints, ZoomIn, ZoomOut } from "lucide-react";
 import { type PlannerApi, initPlanner } from "./planner";
 import {
   defaultPlannerSettings,
@@ -23,6 +23,8 @@ const defaultStats: PlannerStats = {
   tilesRaw: "0",
   tilesWithWaste: "0",
   cutTiles: "0",
+  reusedCutGroups: "0",
+  reusableOffcuts: "0",
 };
 
 export default function App() {
@@ -35,6 +37,7 @@ export default function App() {
   const [stats, setStats] = useState<PlannerStats>(defaultStats);
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
   const [panToolActive, setPanToolActive] = useState(false);
+  const [measureToolActive, setMeasureToolActive] = useState(false);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -49,6 +52,7 @@ export default function App() {
       onSettingsChange: (nextSettings) => setSettings(nextSettings),
       onStatsChange: (nextStats) => setStats(nextStats),
       onPanToolChange: (active) => setPanToolActive(active),
+      onMeasureToolChange: (active) => setMeasureToolActive(active),
     });
 
     return () => {
@@ -67,7 +71,7 @@ export default function App() {
 
   function updateTextSetting(key: keyof Pick<
     PlannerSettings,
-    "gridStep" | "tileWidth" | "tileHeight" | "grout" | "waste" | "rotation" | "layoutOffsetX" | "layoutOffsetY" | "scale"
+    "gridStep" | "tileWidth" | "tileHeight" | "grout" | "waste" | "breakageWaste" | "minReusableCut" | "rotation" | "layoutOffsetX" | "layoutOffsetY" | "scale"
   >) {
     return (event: ChangeEvent<HTMLInputElement>) => updateSettings({ [key]: event.target.value });
   }
@@ -187,6 +191,16 @@ export default function App() {
             >
               <Hand size={iconSize} aria-hidden="true" />
             </button>
+            <button
+              className="icon-button"
+              type="button"
+              title={measureToolActive ? "Выключить рулетку" : "Рулетка"}
+              aria-label={measureToolActive ? "Выключить рулетку" : "Рулетка"}
+              aria-pressed={measureToolActive}
+              onClick={() => plannerRef.current?.setMeasureToolEnabled(!measureToolActive)}
+            >
+              <Ruler size={iconSize} aria-hidden="true" />
+            </button>
           </div>
           <canvas ref={canvasRef} width="1120" height="760" tabIndex={0} aria-label="Редактор плана" />
         </div>
@@ -224,8 +238,16 @@ export default function App() {
             <input type="number" min="0" value={settings.grout} onChange={updateTextSetting("grout")} />
           </label>
           <label>
-            Запас, %
+            Запас на подрезку, %
             <input type="number" min="0" value={settings.waste} onChange={updateTextSetting("waste")} />
+          </label>
+          <label>
+            Запас на бой, %
+            <input type="number" min="0" value={settings.breakageWaste} onChange={updateTextSetting("breakageWaste")} />
+          </label>
+          <label>
+            Мин. полезный обрезок, мм
+            <input type="number" min="0" value={settings.minReusableCut} onChange={updateTextSetting("minReusableCut")} />
           </label>
         </section>
 
@@ -292,6 +314,14 @@ export default function App() {
             <div>
               <dt>Обрезки</dt>
               <dd><span>{stats.cutTiles}</span> шт.</dd>
+            </div>
+            <div>
+              <dt>Повторно сгруппировано</dt>
+              <dd><span>{stats.reusedCutGroups}</span> групп</dd>
+            </div>
+            <div>
+              <dt>Полезные остатки</dt>
+              <dd><span>{stats.reusableOffcuts}</span> шт.</dd>
             </div>
           </dl>
         </section>
