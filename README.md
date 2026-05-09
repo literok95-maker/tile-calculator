@@ -48,6 +48,7 @@ http://127.0.0.1:5173/
 ```bash
 pnpm lint
 pnpm test
+pnpm coverage
 pnpm build
 ```
 
