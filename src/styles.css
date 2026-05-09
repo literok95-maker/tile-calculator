@@ -102,6 +102,18 @@ button {
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
+.icon-button {
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+}
+
+.icon-button svg {
+  stroke-width: 2;
+}
+
 button:hover {
   background: #f3f7f7;
   border-color: #95a9ad;
