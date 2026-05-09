@@ -1,4 +1,5 @@
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
+import { Download, Eraser, Magnet, Trash2, Upload, Waypoints } from "lucide-react";
 import { type PlannerApi, initPlanner } from "./planner";
 import {
   defaultPlannerSettings,
@@ -8,6 +9,8 @@ import {
   type SnapOption,
 } from "./projectState";
 import { readSnapOption, snapLabel } from "./snap";
+
+const iconSize = 18;
 
 const unitToCm: Record<DrawUnit, number> = {
   mm: 0.1,
@@ -125,13 +128,15 @@ export default function App() {
           <div className="toolbar" aria-label="Инструменты">
             <div className="snap-menu">
               <button
+                className="icon-button"
                 type="button"
                 aria-haspopup="true"
                 aria-expanded={snapMenuOpen}
-                title="Режим привязки"
+                aria-label={snapLabel(settings.snapOptions)}
+                title={snapLabel(settings.snapOptions)}
                 onClick={() => setSnapMenuOpen((open) => !open)}
               >
-                {snapLabel(settings.snapOptions)}
+                <Magnet size={iconSize} aria-hidden="true" />
               </button>
               <div className="snap-menu-list" hidden={!snapMenuOpen}>
                 {(["guides", "axes", "grid"] as const).map((option) => (
@@ -147,12 +152,22 @@ export default function App() {
                 ))}
               </div>
             </div>
-            <button type="button" onClick={() => plannerRef.current?.closePolygon()}>Замкнуть</button>
-            <button type="button" onClick={() => plannerRef.current?.removeLastPoint()}>Удалить последнюю</button>
-            <button type="button" onClick={exportProject}>Экспорт</button>
-            <button type="button" onClick={() => importFileRef.current?.click()}>Импорт</button>
+            <button className="icon-button" type="button" title="Замкнуть контур" aria-label="Замкнуть контур" onClick={() => plannerRef.current?.closePolygon()}>
+              <Waypoints size={iconSize} aria-hidden="true" />
+            </button>
+            <button className="icon-button" type="button" title="Удалить последнюю точку" aria-label="Удалить последнюю точку" onClick={() => plannerRef.current?.removeLastPoint()}>
+              <Trash2 size={iconSize} aria-hidden="true" />
+            </button>
+            <button className="icon-button" type="button" title="Экспортировать чертеж" aria-label="Экспортировать чертеж" onClick={exportProject}>
+              <Download size={iconSize} aria-hidden="true" />
+            </button>
+            <button className="icon-button" type="button" title="Импортировать чертеж" aria-label="Импортировать чертеж" onClick={() => importFileRef.current?.click()}>
+              <Upload size={iconSize} aria-hidden="true" />
+            </button>
             <input ref={importFileRef} type="file" accept="application/json,.json" hidden onChange={importProject} />
-            <button type="button" onClick={() => plannerRef.current?.clear()}>Очистить</button>
+            <button className="icon-button" type="button" title="Очистить чертеж" aria-label="Очистить чертеж" onClick={() => plannerRef.current?.clear()}>
+              <Eraser size={iconSize} aria-hidden="true" />
+            </button>
           </div>
         </div>
         <div className="canvas-wrap">
