@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   assertSavedProject,
+  cloneRoomSnapshot,
   defaultPlannerSettings,
+  defaultRoomSnapshot,
   defaultSnapOptions,
   normalizeSnapOptions,
   settingsFromSavedControls,
@@ -32,7 +34,28 @@ describe("project state", () => {
 
   it("validates imported project shape", () => {
     expect(() => assertSavedProject({ geometry: { points: [], closed: false } })).not.toThrow();
+    expect(() => assertSavedProject({
+      rooms: [{
+        id: "room-a",
+        name: "Помещение A",
+        points: [],
+        closed: false,
+      }],
+    })).not.toThrow();
     expect(() => assertSavedProject({})).toThrow("Project file does not contain geometry");
+    expect(() => assertSavedProject({ rooms: [] })).toThrow("Project file does not contain geometry");
+  });
+
+  it("creates independent room snapshots", () => {
+    const room = defaultRoomSnapshot();
+    const clone = cloneRoomSnapshot(room);
+
+    clone.points[0].x = 999;
+
+    expect(room.id).toBe("room-1");
+    expect(room.name).toBe("Помещение 1");
+    expect(room.points[0].x).toBe(120);
+    expect(clone.points[0].x).toBe(999);
   });
 
   it("migrates saved controls without overwriting invalid enum values", () => {

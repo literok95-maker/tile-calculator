@@ -13,6 +13,8 @@ describe("planner state", () => {
     const state = createInitialPlannerState();
     const snapshot = geometrySnapshot(state);
 
+    expect(state.rooms).toHaveLength(1);
+    expect(state.activeRoomId).toBe("room-1");
     state.points = [];
     state.closed = false;
     restoreGeometry(state, snapshot);

@@ -1,8 +1,18 @@
 import type { Point } from "./geometry";
-import { defaultSnapOptions, type DrawUnit, type GeometrySnapshot, type SnapOptions } from "./projectState";
+import {
+  cloneRoomSnapshot,
+  defaultRoomSnapshot,
+  defaultSnapOptions,
+  type DrawUnit,
+  type GeometrySnapshot,
+  type RoomSnapshot,
+  type SnapOptions,
+} from "./projectState";
 import type { Guide } from "./snap";
 
 export interface PlannerState extends GeometrySnapshot {
+  rooms: RoomSnapshot[];
+  activeRoomId: string;
   draggingIndex: number;
   dragSnapshot: GeometrySnapshot | null;
   dragOffset: Point | null;
@@ -31,14 +41,12 @@ export interface PlannerState extends GeometrySnapshot {
 }
 
 export function createInitialPlannerState(): PlannerState {
+  const firstRoom = defaultRoomSnapshot();
   return {
-    points: [
-      { x: 120, y: 130 },
-      { x: 700, y: 130 },
-      { x: 700, y: 500 },
-      { x: 120, y: 500 },
-    ],
-    closed: true,
+    points: firstRoom.points.map((point) => ({ ...point })),
+    closed: firstRoom.closed,
+    rooms: [cloneRoomSnapshot(firstRoom)],
+    activeRoomId: firstRoom.id,
     draggingIndex: -1,
     dragSnapshot: null,
     dragOffset: null,

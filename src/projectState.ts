@@ -18,6 +18,11 @@ export interface GeometrySnapshot {
   closed: boolean;
 }
 
+export interface RoomSnapshot extends GeometrySnapshot {
+  id: string;
+  name: string;
+}
+
 export interface SavedProjectControls {
   drawUnit?: unknown;
   gridStep?: unknown;
@@ -72,11 +77,42 @@ export interface SavedProject {
   format?: string;
   version?: number;
   geometry?: GeometrySnapshot;
+  rooms?: RoomSnapshot[];
+  activeRoomId?: unknown;
   controls?: SavedProjectControls;
   view?: {
     zoom?: unknown;
     panX?: unknown;
     panY?: unknown;
+  };
+}
+
+export function cloneGeometrySnapshot(snapshot: GeometrySnapshot): GeometrySnapshot {
+  return {
+    points: snapshot.points.map((point) => ({ ...point })),
+    closed: snapshot.closed,
+  };
+}
+
+export function cloneRoomSnapshot(room: RoomSnapshot): RoomSnapshot {
+  return {
+    id: room.id,
+    name: room.name,
+    ...cloneGeometrySnapshot(room),
+  };
+}
+
+export function defaultRoomSnapshot(): RoomSnapshot {
+  return {
+    id: "room-1",
+    name: "Помещение 1",
+    points: [
+      { x: 120, y: 130 },
+      { x: 700, y: 130 },
+      { x: 700, y: 500 },
+      { x: 120, y: 500 },
+    ],
+    closed: true,
   };
 }
 
@@ -192,7 +228,17 @@ export function assertSavedProject(value: unknown): asserts value is SavedProjec
   }
 
   const candidate = value as SavedProject;
-  if (!candidate.geometry || !Array.isArray(candidate.geometry.points)) {
+  const hasLegacyGeometry = Boolean(candidate.geometry && Array.isArray(candidate.geometry.points));
+  const hasRooms = Array.isArray(candidate.rooms) && candidate.rooms.length > 0 && candidate.rooms.every((room) =>
+    room &&
+    typeof room === "object" &&
+    typeof room.id === "string" &&
+    typeof room.name === "string" &&
+    Array.isArray(room.points) &&
+    typeof room.closed === "boolean"
+  );
+
+  if (!hasLegacyGeometry && !hasRooms) {
     throw new Error("Project file does not contain geometry");
   }
 }

@@ -34,6 +34,10 @@ select {
   overflow: hidden;
 }
 
+.app-shell.panel-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .workspace,
 .panel {
   background: rgba(255, 253, 250, 0.94);
@@ -117,6 +121,11 @@ button {
 button:hover {
   background: #f3f7f7;
   border-color: #95a9ad;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 button[aria-pressed="true"] {
@@ -232,6 +241,24 @@ label {
   font-size: 14px;
 }
 
+.room-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.room-controls label {
+  margin-bottom: 0;
+}
+
+.room-actions {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 1px;
+}
+
 .check-row {
   grid-template-columns: 18px 1fr;
   align-items: center;
@@ -255,6 +282,18 @@ select:focus {
   border-color: #2f6f62;
   box-shadow: 0 0 0 3px rgba(47, 111, 98, 0.14);
   outline: none;
+}
+
+.invalid-input,
+.invalid-input:focus {
+  border-color: #c85f35;
+  box-shadow: 0 0 0 3px rgba(200, 95, 53, 0.16);
+}
+
+.field-error {
+  color: #9d4525;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 input[type="range"] {
