@@ -76,6 +76,10 @@ describe("geometry", () => {
       { x: 5, y: 10 },
     ];
 
-    expect(tileCoverage(halfCoveredTile, room).ratio).toBe(0.5);
+    expect(tileCoverage(halfCoveredTile, room)).toMatchObject({
+      ratio: 0.5,
+      spanU: 0.5,
+      spanV: 1,
+    });
   });
 });

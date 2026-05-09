@@ -27,6 +27,8 @@ export interface SavedProjectControls {
   tileHeight?: unknown;
   grout?: unknown;
   waste?: unknown;
+  breakageWaste?: unknown;
+  minReusableCut?: unknown;
   layout?: unknown;
   rotation?: unknown;
   layoutOffsetX?: unknown;
@@ -45,6 +47,8 @@ export interface PlannerSettings {
   tileHeight: string;
   grout: string;
   waste: string;
+  breakageWaste: string;
+  minReusableCut: string;
   layout: LayoutType;
   rotation: string;
   layoutOffsetX: string;
@@ -60,6 +64,8 @@ export interface PlannerStats {
   tilesRaw: string;
   tilesWithWaste: string;
   cutTiles: string;
+  reusedCutGroups: string;
+  reusableOffcuts: string;
 }
 
 export interface SavedProject {
@@ -85,7 +91,9 @@ export function defaultPlannerSettings(): PlannerSettings {
     tileWidth: "600",
     tileHeight: "600",
     grout: "2",
-    waste: "10",
+    waste: "7",
+    breakageWaste: "3",
+    minReusableCut: "80",
     layout: "straight",
     rotation: "0",
     layoutOffsetX: "0",
@@ -115,6 +123,8 @@ export function settingsFromSavedControls(
     "tileHeight",
     "grout",
     "waste",
+    "breakageWaste",
+    "minReusableCut",
     "rotation",
     "layoutOffsetX",
     "layoutOffsetY",

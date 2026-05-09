@@ -48,6 +48,19 @@ interface PointActionHit {
   index: number;
 }
 
+interface ScreenLabelOptions {
+  font: string;
+  fillStyle: string;
+  backgroundStyle?: string;
+  strokeStyle?: string;
+  minWidth?: number;
+  paddingX?: number;
+  width?: number;
+  height: number;
+  radius?: number;
+  offset?: Point;
+}
+
 export interface PlannerApi {
   setSettings(settings: PlannerSettings): void;
   exportProject(): SavedProject;
@@ -58,6 +71,7 @@ export interface PlannerApi {
   zoomIn(): void;
   zoomOut(): void;
   setPanToolEnabled(enabled: boolean): void;
+  setMeasureToolEnabled(enabled: boolean): void;
   destroy(): void;
 }
 
@@ -66,6 +80,7 @@ export interface PlannerInitOptions {
   onSettingsChange(settings: PlannerSettings): void;
   onStatsChange(stats: PlannerStats): void;
   onPanToolChange(active: boolean): void;
+  onMeasureToolChange(active: boolean): void;
 }
 
 export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptions): PlannerApi {
@@ -105,6 +120,10 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   
   function drawUnit(): DrawUnit {
     return settings.drawUnit;
+  }
+
+  function screenPx(value: number): number {
+    return value / state.viewZoom;
   }
   
   function drawingStepCm(): number {
@@ -158,6 +177,8 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
         tileHeight: settings.tileHeight,
         grout: settings.grout,
         waste: settings.waste,
+        breakageWaste: settings.breakageWaste,
+        minReusableCut: settings.minReusableCut,
         layout: settings.layout,
         rotation: settings.rotation,
         layoutOffsetX: settings.layoutOffsetX,
@@ -245,6 +266,43 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       y: event.clientY - rect.top,
     };
   }
+
+  function drawScreenLabel(worldPoint: Point, text: string, labelOptions: ScreenLabelOptions): void {
+    const screenPoint = worldToScreen(worldPoint);
+    const offset = labelOptions.offset || { x: 0, y: 0 };
+    const x = screenPoint.x + offset.x;
+    const y = screenPoint.y + offset.y;
+
+    ctx.save();
+    ctx.setTransform(state.pixelRatio, 0, 0, state.pixelRatio, 0, 0);
+    ctx.font = labelOptions.font;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const width = labelOptions.width ?? Math.max(
+      ctx.measureText(text).width + (labelOptions.paddingX ?? 12),
+      labelOptions.minWidth ?? 0,
+    );
+    const height = labelOptions.height;
+    const radius = labelOptions.radius ?? 5;
+
+    if (labelOptions.backgroundStyle) {
+      ctx.fillStyle = labelOptions.backgroundStyle;
+      ctx.beginPath();
+      roundedRectPath(ctx, x - width / 2, y - height / 2, width, height, radius);
+      ctx.fill();
+    }
+    if (labelOptions.strokeStyle) {
+      ctx.strokeStyle = labelOptions.strokeStyle;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      roundedRectPath(ctx, x - width / 2, y - height / 2, width, height, radius);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = labelOptions.fillStyle;
+    ctx.fillText(text, x, y + 0.5);
+    ctx.restore();
+  }
   
   function snapDrawingPoint(point: Point, anchor: Point | null = null): Point {
     return snapPoint(point, { anchor });
@@ -328,14 +386,50 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   
     return best;
   }
+
+  function snapMeasurePoint(point: Point): Point {
+    const snapThreshold = 12 / state.viewZoom;
+    const nearestPoint = state.points
+      .map((existing) => ({ point: existing, distance: distance(existing, point) }))
+      .filter((candidate) => candidate.distance <= snapThreshold)
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (nearestPoint) {
+      state.guides = [];
+      return { ...nearestPoint.point };
+    }
+
+    const segmentHit = segmentAtPoint(point);
+    if (segmentHit && segmentHit.distance <= snapThreshold) {
+      state.guides = [];
+      return { ...segmentHit.point };
+    }
+
+    return point;
+  }
   
   function calculateTiles(): TileLayoutResult {
     if (!state.closed || state.points.length < 3) {
-      return { tiles: [], cut: 0, materialTiles: 0 };
+      return {
+        tiles: [],
+        cut: 0,
+        materialTiles: 0,
+        cutSummary: {
+          groupedSourceTiles: 0,
+          groupedFragments: 0,
+          reusableOffcuts: 0,
+        },
+      };
     }
   
-    const tileWidth = cmToPx((Number(settings.tileWidth) + Number(settings.grout)) / 10);
-    const tileHeight = cmToPx((Number(settings.tileHeight) + Number(settings.grout)) / 10);
+    const tileWidthMm = Number(settings.tileWidth) + Number(settings.grout);
+    const tileHeightMm = Number(settings.tileHeight) + Number(settings.grout);
+    const tileWidth = cmToPx(tileWidthMm / 10);
+    const tileHeight = cmToPx(tileHeightMm / 10);
+    const minReusableCut = Math.max(Number(settings.minReusableCut) || 0, 0);
+    const minReusableCutRatio = Math.min(
+      Math.max((minReusableCut * minReusableCut) / Math.max(tileWidthMm * tileHeightMm, 1), 0),
+      1,
+    );
     const layout = settings.layout as LayoutType;
     const baseRotation = Number(settings.rotation) * (Math.PI / 180);
     const layoutOffsetX = cmToPx(Number(settings.layoutOffsetX) || 0);
@@ -345,6 +439,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       origin,
       tileWidth,
       tileHeight,
+      minReusableCutRatio,
       layout,
       rotation: baseRotation,
       offsetX: layoutOffsetX,
@@ -464,6 +559,49 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     ctx.stroke();
   }
 
+  function drawMeasureTool(): void {
+    if (!state.measureStart) return;
+    const end = state.measureEnd || state.measureDraft;
+    if (!end) return;
+    const lengthText = formatDrawingLength(pxToCm(distance(state.measureStart, end)));
+    const mid = {
+      x: (state.measureStart.x + end.x) / 2,
+      y: (state.measureStart.y + end.y) / 2,
+    };
+
+    ctx.save();
+    ctx.lineWidth = screenPx(2);
+    ctx.strokeStyle = "#7c3aed";
+    ctx.fillStyle = "#7c3aed";
+    ctx.setLineDash(state.measureEnd ? [] : [screenPx(8), screenPx(6)]);
+    ctx.beginPath();
+    ctx.moveTo(state.measureStart.x, state.measureStart.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    [state.measureStart, end].forEach((point) => {
+      ctx.beginPath();
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#7c3aed";
+      ctx.lineWidth = screenPx(2);
+      ctx.arc(point.x, point.y, screenPx(5), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+
+    ctx.restore();
+    drawScreenLabel(mid, lengthText, {
+      font: "700 12px Inter, system-ui, sans-serif",
+      fillStyle: "#5b21b6",
+      backgroundStyle: "rgba(255, 253, 250, 0.96)",
+      strokeStyle: "rgba(124, 58, 237, 0.55)",
+      height: 26,
+      paddingX: 16,
+      radius: 7,
+    });
+  }
+
   function drawPointActions(): void {
     if (state.selectedPointIndex < 0 || state.draggingIndex >= 0) return;
     const buttons = pointActionButtons();
@@ -521,9 +659,6 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   function drawSegmentLabels(): void {
     if (state.points.length < 2) return;
     const segmentCount = state.closed ? state.points.length : state.points.length - 1;
-    ctx.font = "12px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
   
     for (let i = 0; i < segmentCount; i += 1) {
       const start = state.points[i];
@@ -533,24 +668,27 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       const normal = { x: -Math.sin(angle), y: Math.cos(angle) };
       const text = formatDrawingLength(pxToCm(distance(start, end)));
       const label = {
-        x: mid.x + normal.x * 18,
-        y: mid.y + normal.y * 18,
+        x: mid.x,
+        y: mid.y,
       };
-  
-      ctx.fillStyle = "rgba(255, 253, 250, 0.90)";
-      const width = ctx.measureText(text).width + 12;
-      ctx.fillRect(label.x - width / 2, label.y - 10, width, 20);
-      ctx.fillStyle = "#4f463d";
-      ctx.fillText(text, label.x, label.y);
+      drawScreenLabel(label, text, {
+        font: "12px Inter, system-ui, sans-serif",
+        fillStyle: "#4f463d",
+        backgroundStyle: "rgba(255, 253, 250, 0.90)",
+        height: 20,
+        paddingX: 12,
+        radius: 4,
+        offset: {
+          x: normal.x * 18,
+          y: normal.y * 18,
+        },
+      });
     }
-  
-    ctx.textAlign = "start";
-    ctx.textBaseline = "alphabetic";
   }
   
   function drawPolygon(): void {
     if (state.points.length === 0) return;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = screenPx(2);
     ctx.strokeStyle = "#1f3f3a";
     ctx.fillStyle = "rgba(47, 111, 98, 0.10)";
     ctx.beginPath();
@@ -562,13 +700,13 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       if (index === state.selectedPointIndex) {
         ctx.beginPath();
         ctx.strokeStyle = "#f2b84b";
-        ctx.lineWidth = 3;
-        ctx.arc(point.x, point.y, 10, 0, Math.PI * 2);
+        ctx.lineWidth = screenPx(3);
+        ctx.arc(point.x, point.y, screenPx(10), 0, Math.PI * 2);
         ctx.stroke();
       }
       ctx.beginPath();
       ctx.fillStyle = index === state.draggingIndex ? "#c85f35" : "#2f6f62";
-      ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, screenPx(6), 0, Math.PI * 2);
       ctx.fill();
     });
     drawDraftSegment();
@@ -580,8 +718,8 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     const anchor = state.points[state.points.length - 1];
   
     ctx.save();
-    ctx.setLineDash([8, 6]);
-    ctx.lineWidth = 2;
+    ctx.setLineDash([screenPx(8), screenPx(6)]);
+    ctx.lineWidth = screenPx(2);
     ctx.strokeStyle = "#c85f35";
     ctx.beginPath();
     ctx.moveTo(anchor.x, anchor.y);
@@ -590,7 +728,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     ctx.setLineDash([]);
     ctx.fillStyle = "#c85f35";
     ctx.beginPath();
-    ctx.arc(state.draftPoint.x, state.draftPoint.y, 5, 0, Math.PI * 2);
+    ctx.arc(state.draftPoint.x, state.draftPoint.y, screenPx(5), 0, Math.PI * 2);
     ctx.fill();
   
     const mid = {
@@ -600,22 +738,16 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     const text = state.measureInput
       ? `${state.measureInput.replace(".", ",")} ${unitLabels[drawUnit()]}`
       : formatDrawingLength(pxToCm(distance(anchor, state.draftPoint)));
-    ctx.font = "700 12px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const width = ctx.measureText(text).width + 14;
-    ctx.fillStyle = "rgba(255, 253, 250, 0.96)";
-    ctx.strokeStyle = "rgba(200, 95, 53, 0.45)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    roundedRectPath(ctx, mid.x - width / 2, mid.y - 12, width, 24, 6);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "#9d4525";
-    ctx.fillText(text, mid.x, mid.y + 0.5);
-    ctx.textAlign = "start";
-    ctx.textBaseline = "alphabetic";
     ctx.restore();
+    drawScreenLabel(mid, text, {
+      font: "700 12px Inter, system-ui, sans-serif",
+      fillStyle: "#9d4525",
+      backgroundStyle: "rgba(255, 253, 250, 0.96)",
+      strokeStyle: "rgba(200, 95, 53, 0.45)",
+      height: 24,
+      paddingX: 14,
+      radius: 6,
+    });
   }
   
   function drawTiles(tiles: TilePlan[]): void {
@@ -641,49 +773,45 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     });
     ctx.restore();
   
-  if (settings.showTileNumbers) {
+    if (settings.showTileNumbers) {
       tiles.forEach((tile) => {
         if (!tile.label) return;
         const center = tile.labelPoint || tileCenter(tile);
         const label = tile.label;
-        ctx.font = tile.full ? "700 13px Inter, system-ui, sans-serif" : "700 12px Inter, system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        const width = Math.max(ctx.measureText(label).width + 10, tile.full ? 24 : 30);
-        const height = 20;
-  
-        ctx.fillStyle = highlightFullTiles
-          ? (tile.full ? "rgba(255, 253, 250, 0.92)" : "rgba(255, 244, 236, 0.95)")
-          : "rgba(255, 253, 250, 0.92)";
-        ctx.strokeStyle = highlightFullTiles
-          ? (tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)")
-          : "rgba(39, 97, 147, 0.65)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        roundedRectPath(ctx, center.x - width / 2, center.y - height / 2, width, height, 5);
-        ctx.fill();
-        ctx.stroke();
-        ctx.fillStyle = highlightFullTiles
-          ? (tile.full ? "#214f78" : "#9d4525")
-          : "#214f78";
-        ctx.fillText(label, center.x, center.y + 0.5);
+        drawScreenLabel(center, label, {
+          font: tile.full ? "700 13px Inter, system-ui, sans-serif" : "700 12px Inter, system-ui, sans-serif",
+          fillStyle: highlightFullTiles
+            ? (tile.full ? "#214f78" : "#9d4525")
+            : "#214f78",
+          backgroundStyle: highlightFullTiles
+            ? (tile.full ? "rgba(255, 253, 250, 0.92)" : "rgba(255, 244, 236, 0.95)")
+            : "rgba(255, 253, 250, 0.92)",
+          strokeStyle: highlightFullTiles
+            ? (tile.full ? "rgba(39, 97, 147, 0.65)" : "rgba(166, 73, 36, 0.75)")
+            : "rgba(39, 97, 147, 0.65)",
+          height: 20,
+          minWidth: tile.full ? 24 : 30,
+          paddingX: 10,
+          radius: 5,
+        });
       });
     }
-  
-    ctx.textAlign = "start";
-    ctx.textBaseline = "alphabetic";
   }
   
   function updateStats(tileResult: TileLayoutResult): void {
     const areaM2 = polygonArea(state.points) / (pxPerCm() ** 2) / 10000;
     const materialTiles = tileResult.materialTiles || 0;
     const raw = Math.ceil(materialTiles);
-    const waste = Number(settings.waste) / 100;
+    const trimmingWaste = Math.max(Number(settings.waste) || 0, 0) / 100;
+    const breakageWaste = Math.max(Number(settings.breakageWaste) || 0, 0) / 100;
+    const totalWaste = trimmingWaste + breakageWaste;
     options.onStatsChange({
       area: state.closed ? areaM2.toFixed(2) : "0",
       tilesRaw: state.closed ? String(raw) : "0",
-      tilesWithWaste: state.closed ? String(Math.ceil(materialTiles * (1 + waste))) : "0",
+      tilesWithWaste: state.closed ? String(Math.ceil(materialTiles * (1 + totalWaste))) : "0",
       cutTiles: state.closed ? String(tileResult.cut) : "0",
+      reusedCutGroups: state.closed ? String(tileResult.cutSummary.groupedSourceTiles) : "0",
+      reusableOffcuts: state.closed ? String(tileResult.cutSummary.reusableOffcuts) : "0",
     });
   }
   
@@ -698,6 +826,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     drawTiles(tileResult.tiles);
     drawGuides();
     drawPolygon();
+    drawMeasureTool();
     ctx.restore();
     drawGridScaleLabel();
     drawPointActions();
@@ -753,6 +882,22 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       state.panning = true;
       state.lastPanPoint = screenPoint;
       canvas.setPointerCapture(event.pointerId);
+      render();
+      return;
+    }
+
+    if (event.button === 0 && state.measureToolEnabled) {
+      event.preventDefault();
+      const measurePoint = snapMeasurePoint(pointerPosition(event));
+      if (!state.measureStart || state.measureEnd) {
+        state.measureStart = measurePoint;
+        state.measureEnd = null;
+        state.measureDraft = measurePoint;
+      } else {
+        state.measureEnd = measurePoint;
+        state.measureDraft = measurePoint;
+      }
+      state.selectedPointIndex = -1;
       render();
       return;
     }
@@ -812,6 +957,12 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       state.viewPanX += current.x - state.lastPanPoint.x;
       state.viewPanY += current.y - state.lastPanPoint.y;
       state.lastPanPoint = current;
+      render();
+      return;
+    }
+
+    if (state.measureToolEnabled && state.measureStart && !state.measureEnd) {
+      state.measureDraft = snapMeasurePoint(pointerPosition(event));
       render();
       return;
     }
@@ -880,6 +1031,11 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     state.panning = false;
     state.lastPanPoint = null;
     if (enabled) {
+      state.measureToolEnabled = false;
+      state.measureStart = null;
+      state.measureEnd = null;
+      state.measureDraft = null;
+      options.onMeasureToolChange(false);
       state.selectedPointIndex = -1;
       state.draggingIndex = -1;
       state.dragSnapshot = null;
@@ -887,6 +1043,28 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       cancelDrawingSegment();
     }
     options.onPanToolChange(enabled);
+    render();
+  }
+
+  function setMeasureToolEnabled(enabled: boolean): void {
+    if (state.measureToolEnabled === enabled) return;
+    state.measureToolEnabled = enabled;
+    state.panning = false;
+    state.lastPanPoint = null;
+    if (enabled) {
+      state.panToolEnabled = false;
+      options.onPanToolChange(false);
+      state.selectedPointIndex = -1;
+      state.draggingIndex = -1;
+      state.dragSnapshot = null;
+      state.dragOffset = null;
+      cancelDrawingSegment();
+    } else {
+      state.measureStart = null;
+      state.measureEnd = null;
+      state.measureDraft = null;
+    }
+    options.onMeasureToolChange(enabled);
     render();
   }
   
@@ -901,6 +1079,11 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     if (event.key === "Escape" && state.panToolEnabled) {
       event.preventDefault();
       setPanToolEnabled(false);
+      return;
+    }
+    if (event.key === "Escape" && state.measureToolEnabled) {
+      event.preventDefault();
+      setMeasureToolEnabled(false);
       return;
     }
 
@@ -1012,6 +1195,8 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   function updateCanvasCursor(): void {
     if (state.panning) {
       canvas.style.cursor = "grabbing";
+    } else if (state.measureToolEnabled) {
+      canvas.style.cursor = "crosshair";
     } else if (state.panToolEnabled) {
       canvas.style.cursor = "grab";
     } else if (state.draggingIndex >= 0) {
@@ -1062,6 +1247,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       zoomAtScreenPoint({ x: state.viewportWidth / 2, y: state.viewportHeight / 2 }, 1 / 1.18);
     },
     setPanToolEnabled,
+    setMeasureToolEnabled,
     destroy() {
       unbindEvents();
       resizeObserver.disconnect();

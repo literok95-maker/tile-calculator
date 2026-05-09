@@ -19,6 +19,8 @@ export interface SegmentHit {
 export interface TileCoverage {
   ratio: number;
   labelPoint: Point | null;
+  spanU: number;
+  spanV: number;
 }
 
 export type Polygon = Point[];
@@ -49,12 +51,79 @@ export function closestPointOnSegment(point: Point, start: Point, end: Point): S
 
 export function polygonArea(points: Polygon): number {
   if (points.length < 3) return 0;
+  return Math.abs(signedPolygonArea(points)) / 2;
+}
+
+function signedPolygonArea(points: Polygon): number {
   let sum = 0;
   for (let i = 0; i < points.length; i += 1) {
     const next = points[(i + 1) % points.length];
     sum += points[i].x * next.y - next.x * points[i].y;
   }
-  return Math.abs(sum) / 2;
+  return sum;
+}
+
+function polygonCentroid(points: Polygon): Point | null {
+  const areaTwice = signedPolygonArea(points);
+  if (Math.abs(areaTwice) < 0.000001) return null;
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const current = points[i];
+    const next = points[(i + 1) % points.length];
+    const cross = current.x * next.y - next.x * current.y;
+    x += (current.x + next.x) * cross;
+    y += (current.y + next.y) * cross;
+  }
+  const divisor = 3 * areaTwice;
+  return { x: x / divisor, y: y / divisor };
+}
+
+function lineIntersection(a: Point, b: Point, c: Point, d: Point): Point {
+  const abX = b.x - a.x;
+  const abY = b.y - a.y;
+  const cdX = d.x - c.x;
+  const cdY = d.y - c.y;
+  const denominator = abX * cdY - abY * cdX;
+  if (Math.abs(denominator) < 0.000001) return b;
+  const acX = c.x - a.x;
+  const acY = c.y - a.y;
+  const t = (acX * cdY - acY * cdX) / denominator;
+  return { x: a.x + abX * t, y: a.y + abY * t };
+}
+
+function clipPolygonToConvex(subject: Polygon, clip: Polygon): Polygon {
+  const winding = signedPolygonArea(clip);
+  let output = [...subject];
+  const isInside = (edgeStart: Point, edgeEnd: Point, point: Point) => {
+    const cross = (edgeEnd.x - edgeStart.x) * (point.y - edgeStart.y)
+      - (edgeEnd.y - edgeStart.y) * (point.x - edgeStart.x);
+    return winding >= 0 ? cross >= -0.000001 : cross <= 0.000001;
+  };
+
+  for (let i = 0; i < clip.length; i += 1) {
+    const edgeStart = clip[i];
+    const edgeEnd = clip[(i + 1) % clip.length];
+    const input = output;
+    output = [];
+    if (input.length === 0) break;
+
+    let previous = input[input.length - 1];
+    let previousInside = isInside(edgeStart, edgeEnd, previous);
+    input.forEach((current) => {
+      const currentInside = isInside(edgeStart, edgeEnd, current);
+      if (currentInside) {
+        if (!previousInside) output.push(lineIntersection(previous, current, edgeStart, edgeEnd));
+        output.push(current);
+      } else if (previousInside) {
+        output.push(lineIntersection(previous, current, edgeStart, edgeEnd));
+      }
+      previous = current;
+      previousInside = currentInside;
+    });
+  }
+
+  return output;
 }
 
 export function pointInPolygon(point: Point, polygon: Polygon): boolean {
@@ -101,10 +170,13 @@ export function tileIntersectsPolygon(tile: Polygon, polygon: Polygon): boolean 
 }
 
 export function tileCoverage(tile: Polygon, polygon: Polygon): TileCoverage {
-  const samplesPerSide = 10;
-  let inside = 0;
-  let insideX = 0;
-  let insideY = 0;
+  const clipped = clipPolygonToConvex(polygon, tile);
+  const tileArea = polygonArea(tile);
+  const clippedArea = polygonArea(clipped);
+  if (tileArea === 0 || clippedArea === 0) {
+    return { ratio: 0, labelPoint: null, spanU: 0, spanV: 0 };
+  }
+
   const horizontal = {
     x: tile[1].x - tile[0].x,
     y: tile[1].y - tile[0].y,
@@ -114,25 +186,25 @@ export function tileCoverage(tile: Polygon, polygon: Polygon): TileCoverage {
     y: tile[3].y - tile[0].y,
   };
 
-  for (let y = 0; y < samplesPerSide; y += 1) {
-    for (let x = 0; x < samplesPerSide; x += 1) {
-      const u = (x + 0.5) / samplesPerSide;
-      const v = (y + 0.5) / samplesPerSide;
-      const sample = {
-        x: tile[0].x + horizontal.x * u + vertical.x * v,
-        y: tile[0].y + horizontal.y * u + vertical.y * v,
-      };
-      if (pointInPolygon(sample, polygon)) {
-        inside += 1;
-        insideX += sample.x;
-        insideY += sample.y;
-      }
-    }
-  }
+  const horizontalLengthSquared = horizontal.x * horizontal.x + horizontal.y * horizontal.y;
+  const verticalLengthSquared = vertical.x * vertical.x + vertical.y * vertical.y;
+  const projected = clipped.map((point) => {
+    const relative = { x: point.x - tile[0].x, y: point.y - tile[0].y };
+    return {
+      u: horizontalLengthSquared === 0 ? 0 : (relative.x * horizontal.x + relative.y * horizontal.y) / horizontalLengthSquared,
+      v: verticalLengthSquared === 0 ? 0 : (relative.x * vertical.x + relative.y * vertical.y) / verticalLengthSquared,
+    };
+  });
+  const minU = Math.max(0, Math.min(...projected.map((point) => point.u)));
+  const maxU = Math.min(1, Math.max(...projected.map((point) => point.u)));
+  const minV = Math.max(0, Math.min(...projected.map((point) => point.v)));
+  const maxV = Math.min(1, Math.max(...projected.map((point) => point.v)));
 
   return {
-    ratio: inside / (samplesPerSide * samplesPerSide),
-    labelPoint: inside > 0 ? { x: insideX / inside, y: insideY / inside } : null,
+    ratio: Math.min(1, clippedArea / tileArea),
+    labelPoint: polygonCentroid(clipped),
+    spanU: Math.max(0, maxU - minU),
+    spanV: Math.max(0, maxV - minV),
   };
 }
 

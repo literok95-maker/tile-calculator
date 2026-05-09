@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateTileLayout, tileCenter, type TileLayoutInput } from "./tileLayout";
+import { assignTileNumbers, calculateTileLayout, tileCenter, type TileLayoutInput, type TilePlan } from "./tileLayout";
 
 const baseInput: TileLayoutInput = {
   room: [
@@ -11,6 +11,7 @@ const baseInput: TileLayoutInput = {
   origin: { x: 0, y: 0 },
   tileWidth: 10,
   tileHeight: 10,
+  minReusableCutRatio: 0.1,
   layout: "straight",
   rotation: 0,
   offsetX: 0,
@@ -55,7 +56,58 @@ describe("tile layout", () => {
       ],
     });
 
-    expect(result).toEqual({ tiles: [], cut: 0, materialTiles: 0 });
+    expect(result).toEqual({
+      tiles: [],
+      cut: 0,
+      materialTiles: 0,
+      cutSummary: {
+        groupedSourceTiles: 0,
+        groupedFragments: 0,
+        reusableOffcuts: 0,
+      },
+    });
+  });
+
+  it("summarizes grouped cut reuse and useful offcuts", () => {
+    const result = calculateTileLayout({
+      ...baseInput,
+      room: [
+        { x: 0, y: 10 },
+        { x: 20, y: 10 },
+        { x: 20, y: 20 },
+        { x: 0, y: 20 },
+      ],
+      layout: "brick",
+      minReusableCutRatio: 0.4,
+    });
+
+    expect(result.cutSummary).toEqual({
+      groupedSourceTiles: 1,
+      groupedFragments: 2,
+      reusableOffcuts: 0,
+    });
+  });
+
+  it("does not group full-length strips that cannot fit across one source tile", () => {
+    const strip = (index: number): TilePlan => ({
+      points: [
+        { x: index, y: 0 },
+        { x: index + 1, y: 0 },
+        { x: index + 1, y: 1 },
+        { x: index, y: 1 },
+      ],
+      full: false,
+      coverage: 0.26,
+      spanU: 0.43,
+      spanV: 1,
+      labelPoint: null,
+    });
+    const tiles = [strip(0), strip(1), strip(2)];
+
+    const result = assignTileNumbers(tiles, 0.1);
+
+    expect(result.materialTiles).toBe(2);
+    expect(tiles.map((tile) => tile.label)).toEqual(["1.1", "1.2", "2.1"]);
   });
 
   it("offsets every other row for brick layout", () => {

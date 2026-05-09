@@ -43,6 +43,8 @@ describe("project state", () => {
       gridStep: 25,
       tileWidth: 60,
       tileHeight: 12,
+      breakageWaste: 5,
+      minReusableCut: 90,
       showTileNumbers: 0,
       highlightFullTiles: 1,
       snapOptions: { guides: true, axes: false, grid: true },
@@ -53,6 +55,8 @@ describe("project state", () => {
     expect(migrated.gridStep).toBe("25");
     expect(migrated.tileWidth).toBe("600");
     expect(migrated.tileHeight).toBe("120");
+    expect(migrated.breakageWaste).toBe("5");
+    expect(migrated.minReusableCut).toBe("90");
     expect(migrated.showTileNumbers).toBe(false);
     expect(migrated.highlightFullTiles).toBe(true);
     expect(migrated.snapOptions).toEqual({ guides: true, axes: false, grid: true });

@@ -21,6 +21,10 @@ export interface PlannerState extends GeometrySnapshot {
   lastPanPoint: Point | null;
   selectedPointIndex: number;
   panToolEnabled: boolean;
+  measureToolEnabled: boolean;
+  measureStart: Point | null;
+  measureEnd: Point | null;
+  measureDraft: Point | null;
   undoStack: GeometrySnapshot[];
   redoStack: GeometrySnapshot[];
   snapOptions: SnapOptions;
@@ -53,6 +57,10 @@ export function createInitialPlannerState(): PlannerState {
     lastPanPoint: null,
     selectedPointIndex: -1,
     panToolEnabled: false,
+    measureToolEnabled: false,
+    measureStart: null,
+    measureEnd: null,
+    measureDraft: null,
     undoStack: [],
     redoStack: [],
     snapOptions: defaultSnapOptions(),
@@ -73,6 +81,9 @@ export function restoreGeometry(state: PlannerState, snapshot: GeometrySnapshot)
   state.dragSnapshot = null;
   state.dragOffset = null;
   state.selectedPointIndex = -1;
+  state.measureStart = null;
+  state.measureEnd = null;
+  state.measureDraft = null;
   state.drawingSegment = false;
   state.draftPoint = null;
   state.measureInput = "";

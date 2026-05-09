@@ -13,6 +13,8 @@ export interface TilePlan {
   points: Polygon;
   full: boolean;
   coverage: number;
+  spanU?: number;
+  spanV?: number;
   labelPoint: Point | null;
   sourceNumber?: number;
   fragmentNumber?: number;
@@ -24,6 +26,7 @@ export interface TileLayoutInput {
   origin: Point;
   tileWidth: number;
   tileHeight: number;
+  minReusableCutRatio: number;
   layout: LayoutType;
   rotation: number;
   offsetX: number;
@@ -36,6 +39,13 @@ export interface TileLayoutResult {
   tiles: TilePlan[];
   cut: number;
   materialTiles: number;
+  cutSummary: CutSummary;
+}
+
+export interface CutSummary {
+  groupedSourceTiles: number;
+  groupedFragments: number;
+  reusableOffcuts: number;
 }
 
 export function tileCenter(tile: TilePlan): Point {
@@ -64,9 +74,71 @@ function tilePolygon(
   return corners.map((point) => rotatedPoint(origin.x, origin.y, point.x - origin.x, point.y - origin.y, angle));
 }
 
-function assignTileNumbers(tiles: TilePlan[]): number {
+const emptyCutSummary: CutSummary = {
+  groupedSourceTiles: 0,
+  groupedFragments: 0,
+  reusableOffcuts: 0,
+};
+
+type CutStripAxis = "u" | "v";
+type CutPackingMode = "empty" | "strip" | "area";
+
+interface CutBin {
+  sourceNumber: number;
+  remaining: number;
+  fragmentCount: number;
+  packingMode: CutPackingMode;
+  stripAxis: CutStripAxis | null;
+  stripUsed: number;
+}
+
+function cutFragmentMetrics(tile: TilePlan): {
+  coverage: number;
+  spanU: number;
+  spanV: number;
+  stripAxis: CutStripAxis | null;
+  stripWidth: number;
+} {
+  const coverage = Math.max(0, Math.min(1, tile.coverage));
+  const fallbackSpan = Math.sqrt(coverage);
+  const spanU = Math.max(0, Math.min(1, tile.spanU ?? fallbackSpan));
+  const spanV = Math.max(0, Math.min(1, tile.spanV ?? fallbackSpan));
+  const longSpan = Math.max(spanU, spanV);
+  const stripAxis = longSpan >= 0.92 ? (spanU <= spanV ? "u" : "v") : null;
+  return {
+    coverage,
+    spanU,
+    spanV,
+    stripAxis,
+    stripWidth: stripAxis === "u" ? spanU : spanV,
+  };
+}
+
+function canFitCutFragment(bin: CutBin, tile: TilePlan): boolean {
+  const metrics = cutFragmentMetrics(tile);
+  if (bin.remaining + 0.001 < metrics.coverage) return false;
+  if (!metrics.stripAxis) return bin.packingMode !== "strip";
+  if (bin.packingMode === "area") return false;
+  if (bin.stripAxis && bin.stripAxis !== metrics.stripAxis) return false;
+  return bin.stripUsed + metrics.stripWidth <= 1.001;
+}
+
+function addCutFragmentToBin(bin: CutBin, tile: TilePlan): void {
+  const metrics = cutFragmentMetrics(tile);
+  bin.fragmentCount += 1;
+  bin.remaining -= metrics.coverage;
+  if (metrics.stripAxis) {
+    bin.packingMode = "strip";
+    bin.stripAxis = bin.stripAxis ?? metrics.stripAxis;
+    bin.stripUsed += metrics.stripWidth;
+  } else {
+    bin.packingMode = "area";
+  }
+}
+
+export function assignTileNumbers(tiles: TilePlan[], minReusableCutRatio: number): { materialTiles: number; cutSummary: CutSummary } {
   let nextSourceNumber = 1;
-  const cutBins: Array<{ sourceNumber: number; remaining: number; fragmentCount: number }> = [];
+  const cutBins: CutBin[] = [];
 
   tiles
     .filter((tile) => tile.full)
@@ -80,25 +152,36 @@ function assignTileNumbers(tiles: TilePlan[]): number {
     .filter((tile) => !tile.full)
     .sort((a, b) => b.coverage - a.coverage)
     .forEach((tile) => {
-      let bin = cutBins.find((candidate) => candidate.remaining + 0.001 >= tile.coverage);
+      let bin = cutBins.find((candidate) => canFitCutFragment(candidate, tile));
       if (!bin) {
         bin = {
           sourceNumber: nextSourceNumber,
           remaining: 1,
           fragmentCount: 0,
+          packingMode: "empty",
+          stripAxis: null,
+          stripUsed: 0,
         };
         cutBins.push(bin);
         nextSourceNumber += 1;
       }
 
-      bin.fragmentCount = (bin.fragmentCount || 0) + 1;
-      bin.remaining -= tile.coverage;
+      addCutFragmentToBin(bin, tile);
       tile.sourceNumber = bin.sourceNumber;
       tile.fragmentNumber = bin.fragmentCount;
       tile.label = `${tile.sourceNumber}.${tile.fragmentNumber}`;
     });
 
-  return nextSourceNumber - 1;
+  return {
+    materialTiles: nextSourceNumber - 1,
+    cutSummary: {
+      groupedSourceTiles: cutBins.filter((bin) => bin.fragmentCount > 1).length,
+      groupedFragments: cutBins
+        .filter((bin) => bin.fragmentCount > 1)
+        .reduce((sum, bin) => sum + bin.fragmentCount, 0),
+      reusableOffcuts: cutBins.filter((bin) => bin.remaining >= minReusableCutRatio).length,
+    },
+  };
 }
 
 function collectIntersectingTile(tile: Polygon, room: Polygon, tiles: TilePlan[]): number {
@@ -107,7 +190,14 @@ function collectIntersectingTile(tile: Polygon, room: Polygon, tiles: TilePlan[]
   const coverage = coverageResult.ratio;
   if (coverage === 0) return 0;
   const full = coverage >= 0.98;
-  tiles.push({ points: tile, full, coverage, labelPoint: coverageResult.labelPoint });
+  tiles.push({
+    points: tile,
+    full,
+    coverage,
+    spanU: coverageResult.spanU,
+    spanV: coverageResult.spanV,
+    labelPoint: coverageResult.labelPoint,
+  });
   return full ? 0 : 1;
 }
 
@@ -167,7 +257,7 @@ function herringboneTileSet(
 
 export function calculateTileLayout(input: TileLayoutInput): TileLayoutResult {
   if (input.room.length < 3) {
-    return { tiles: [], cut: 0, materialTiles: 0 };
+    return { tiles: [], cut: 0, materialTiles: 0, cutSummary: emptyCutSummary };
   }
 
   const angle = input.rotation + (input.layout === "diagonal" ? Math.PI / 4 : 0);
@@ -228,6 +318,6 @@ export function calculateTileLayout(input: TileLayoutInput): TileLayoutResult {
     }
   }
 
-  const materialTiles = assignTileNumbers(tiles);
-  return { tiles, cut, materialTiles };
+  const numberedTiles = assignTileNumbers(tiles, input.minReusableCutRatio);
+  return { tiles, cut, ...numberedTiles };
 }
