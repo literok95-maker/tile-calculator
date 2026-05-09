@@ -51,6 +51,12 @@ pnpm test
 pnpm build
 ```
 
+## Pull Requests
+
+Ветка `master` защищена: изменения попадают через pull request после успешного `Quality checks`.
+
+Чтобы PR автоматически слился после зеленого pipeline, добавьте label `auto-merge`.
+
 ## Публикация
 
 Приложение статическое. Для production-сборки:
