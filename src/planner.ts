@@ -9,9 +9,12 @@ import {
 import { polygonPath, roundedRectPath, visibleWorldBounds as calculateVisibleWorldBounds } from "./canvasRenderer";
 import {
   assertSavedProject,
+  cloneGeometrySnapshot,
+  cloneRoomSnapshot,
   EXPORT_FORMAT,
   type DrawUnit,
   type PlannerSettings,
+  type RoomSnapshot,
   type PlannerStats,
   type SavedProject,
   settingsFromSavedControls,
@@ -43,6 +46,12 @@ interface SegmentInsertHit {
 
 type PointAction = "move" | "delete";
 
+export interface PlannerRoomView {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
 interface PointActionHit {
   action: PointAction;
   index: number;
@@ -65,6 +74,10 @@ export interface PlannerApi {
   setSettings(settings: PlannerSettings): void;
   exportProject(): SavedProject;
   importProject(project: unknown): void;
+  createRoom(): void;
+  selectRoom(roomId: string): void;
+  renameActiveRoom(name: string): void;
+  deleteActiveRoom(): void;
   closePolygon(): void;
   removeLastPoint(): void;
   clear(): void;
@@ -79,6 +92,7 @@ export interface PlannerInitOptions {
   settings: PlannerSettings;
   onSettingsChange(settings: PlannerSettings): void;
   onStatsChange(stats: PlannerStats): void;
+  onRoomsChange(rooms: PlannerRoomView[]): void;
   onPanToolChange(active: boolean): void;
   onMeasureToolChange(active: boolean): void;
 }
@@ -163,12 +177,73 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     state.guides = result.guides;
     return result.point;
   }
+
+  function roomList(): PlannerRoomView[] {
+    return state.rooms.map((room) => ({
+      id: room.id,
+      name: room.name,
+      active: room.id === state.activeRoomId,
+    }));
+  }
+
+  function notifyRoomsChanged(): void {
+    options.onRoomsChange(roomList());
+  }
+
+  function syncActiveRoom(): void {
+    const activeIndex = state.rooms.findIndex((room) => room.id === state.activeRoomId);
+    if (activeIndex < 0) return;
+    state.rooms[activeIndex] = {
+      ...state.rooms[activeIndex],
+      points: state.points.map((point) => ({ ...point })),
+      closed: state.closed,
+    };
+  }
+
+  function roomName(index: number): string {
+    return `Помещение ${index}`;
+  }
+
+  function uniqueRoomName(name: string, roomId: string): string {
+    const normalized = name.trim();
+    if (!normalized) return name;
+    const usedNames = new Set(
+      state.rooms
+        .filter((room) => room.id !== roomId)
+        .map((room) => room.name.trim().toLowerCase())
+        .filter(Boolean),
+    );
+    if (!usedNames.has(normalized.toLowerCase())) return name;
+
+    let index = 2;
+    let candidate = `${normalized} ${index}`;
+    while (usedNames.has(candidate.toLowerCase())) {
+      index += 1;
+      candidate = `${normalized} ${index}`;
+    }
+    return candidate;
+  }
+
+  function createRoomId(): string {
+    return `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  }
+
+  function loadRoom(room: RoomSnapshot): void {
+    restoreGeometrySnapshot(state, cloneGeometrySnapshot(room));
+    state.activeRoomId = room.id;
+    resetHistory(state);
+    state.guides = [];
+    state.selectedPointIndex = -1;
+  }
   
   function serializeAppState(): SavedProject {
+    syncActiveRoom();
     return {
       format: EXPORT_FORMAT,
-      version: 1,
+      version: 2,
       geometry: snapshotGeometry(state),
+      rooms: state.rooms.map(cloneRoomSnapshot),
+      activeRoomId: state.activeRoomId,
       controls: {
         drawUnit: drawUnit(),
         gridStep: settings.gridStep,
@@ -197,8 +272,17 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   
   function applyAppState(savedState: SavedProject): void {
     assertSavedProject(savedState);
-  
-    restoreGeometrySnapshot(state, savedState.geometry!);
+
+    const importedRooms = savedState.rooms?.length
+      ? savedState.rooms.map(cloneRoomSnapshot)
+      : [{
+        id: "room-1",
+        name: "Помещение 1",
+        ...cloneGeometrySnapshot(savedState.geometry!),
+      }];
+    state.rooms = importedRooms;
+    const activeRoom = state.rooms.find((room) => room.id === savedState.activeRoomId) || state.rooms[0];
+    loadRoom(activeRoom);
   
     settings = settingsFromSavedControls(settings, savedState.controls);
     state.snapOptions = settings.snapOptions;
@@ -209,6 +293,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     state.viewPanY = Number(savedState.view?.panY) || 0;
     resetHistory(state);
     options.onSettingsChange(settings);
+    notifyRoomsChanged();
   }
   
   function saveAppState(): void {
@@ -235,6 +320,50 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     } finally {
       isRestoringState = false;
     }
+  }
+
+  function createRoom(): void {
+    syncActiveRoom();
+    const room: RoomSnapshot = {
+      id: createRoomId(),
+      name: uniqueRoomName(roomName(state.rooms.length + 1), ""),
+      points: [],
+      closed: false,
+    };
+    state.rooms.push(room);
+    loadRoom(room);
+    notifyRoomsChanged();
+    render();
+  }
+
+  function selectRoom(roomId: string): void {
+    if (roomId === state.activeRoomId) return;
+    syncActiveRoom();
+    const room = state.rooms.find((candidate) => candidate.id === roomId);
+    if (!room) return;
+    loadRoom(room);
+    notifyRoomsChanged();
+    render();
+  }
+
+  function renameActiveRoom(name: string): void {
+    const activeRoom = state.rooms.find((room) => room.id === state.activeRoomId);
+    if (!activeRoom) return;
+    if (!name.trim()) return;
+    activeRoom.name = uniqueRoomName(name, activeRoom.id);
+    notifyRoomsChanged();
+    render();
+  }
+
+  function deleteActiveRoom(): void {
+    if (state.rooms.length <= 1) return;
+    const activeIndex = state.rooms.findIndex((room) => room.id === state.activeRoomId);
+    if (activeIndex < 0) return;
+    const nextIndex = Math.max(activeIndex - 1, 0);
+    state.rooms.splice(activeIndex, 1);
+    loadRoom(state.rooms[nextIndex] || state.rooms[0]);
+    notifyRoomsChanged();
+    render();
   }
   
   function undo(): void {
@@ -1207,6 +1336,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   }
   
   restoreAppState();
+  notifyRoomsChanged();
   const unbindEvents = bindPlannerEvents(canvas, {
     pointerDown: handlePointerDown,
     pointerMove: handlePointerMove,
@@ -1237,6 +1367,10 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       pushUndoSnapshot(state, beforeSnapshot);
       render();
     },
+    createRoom,
+    selectRoom,
+    renameActiveRoom,
+    deleteActiveRoom,
     closePolygon: handleClosePolygon,
     removeLastPoint: handleRemoveLastPoint,
     clear: handleClear,

@@ -1,6 +1,20 @@
 import { type ChangeEvent, useEffect, useRef, useState } from "react";
-import { Download, Eraser, Hand, Magnet, Ruler, Upload, Waypoints, ZoomIn, ZoomOut } from "lucide-react";
-import { type PlannerApi, initPlanner } from "./planner";
+import {
+  Download,
+  Eraser,
+  Hand,
+  Magnet,
+  PanelRightClose,
+  PanelRightOpen,
+  Plus,
+  Ruler,
+  Trash2,
+  Upload,
+  Waypoints,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-react";
+import { type PlannerApi, type PlannerRoomView, initPlanner } from "./planner";
 import {
   defaultPlannerSettings,
   type DrawUnit,
@@ -38,6 +52,9 @@ export default function App() {
   const [snapMenuOpen, setSnapMenuOpen] = useState(false);
   const [panToolActive, setPanToolActive] = useState(false);
   const [measureToolActive, setMeasureToolActive] = useState(false);
+  const [rooms, setRooms] = useState<PlannerRoomView[]>([]);
+  const [panelVisible, setPanelVisible] = useState(true);
+  const [roomNameDraft, setRoomNameDraft] = useState<{ roomId: string; name: string } | null>(null);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -51,6 +68,7 @@ export default function App() {
       settings: initialSettingsRef.current,
       onSettingsChange: (nextSettings) => setSettings(nextSettings),
       onStatsChange: (nextStats) => setStats(nextStats),
+      onRoomsChange: (nextRooms) => setRooms(nextRooms),
       onPanToolChange: (active) => setPanToolActive(active),
       onMeasureToolChange: (active) => setMeasureToolActive(active),
     });
@@ -123,8 +141,27 @@ export default function App() {
     }
   }
 
+  const activeRoomId = rooms.find((room) => room.active)?.id || rooms[0]?.id || "";
+  const activeRoomName = rooms.find((room) => room.active)?.name || "";
+  const displayedRoomName = roomNameDraft?.roomId === activeRoomId ? roomNameDraft.name : activeRoomName;
+  const roomNameError = roomNameValidationError(displayedRoomName, activeRoomId);
+
+  function roomNameValidationError(name: string, roomId: string): string {
+    const normalizedName = name.trim().toLowerCase();
+    if (!normalizedName) return "Введите название помещения";
+    const duplicateRoom = rooms.find((room) => room.id !== roomId && room.name.trim().toLowerCase() === normalizedName);
+    return duplicateRoom ? "Помещение с таким названием уже есть" : "";
+  }
+
+  function updateActiveRoomName(event: ChangeEvent<HTMLInputElement>) {
+    const nextName = event.target.value;
+    setRoomNameDraft({ roomId: activeRoomId, name: nextName });
+    if (roomNameValidationError(nextName, activeRoomId)) return;
+    plannerRef.current?.renameActiveRoom(nextName);
+  }
+
   return (
-    <main className="app-shell">
+    <main className={panelVisible ? "app-shell" : "app-shell panel-hidden"}>
       <section className="workspace" aria-label="План помещения">
         <div className="canvas-header">
           <div>
@@ -171,6 +208,18 @@ export default function App() {
             <button className="icon-button" type="button" title="Очистить чертеж" aria-label="Очистить чертеж" onClick={() => plannerRef.current?.clear()}>
               <Eraser size={iconSize} aria-hidden="true" />
             </button>
+            <button
+              className="icon-button"
+              type="button"
+              title={panelVisible ? "Скрыть параметры" : "Показать параметры"}
+              aria-label={panelVisible ? "Скрыть параметры" : "Показать параметры"}
+              aria-pressed={!panelVisible}
+              onClick={() => setPanelVisible((visible) => !visible)}
+            >
+              {panelVisible
+                ? <PanelRightClose size={iconSize} aria-hidden="true" />
+                : <PanelRightOpen size={iconSize} aria-hidden="true" />}
+            </button>
           </div>
         </div>
         <div className="canvas-wrap">
@@ -206,9 +255,46 @@ export default function App() {
         </div>
       </section>
 
-      <aside className="panel" aria-label="Параметры расчета">
+      {panelVisible && <aside className="panel" aria-label="Параметры расчета">
         <section>
           <h2>Помещение</h2>
+          <div className="room-controls">
+            <label>
+              Активное помещение
+              <select value={activeRoomId} onChange={(event) => plannerRef.current?.selectRoom(event.target.value)}>
+                {rooms.map((room) => (
+                  <option key={room.id} value={room.id}>{room.name}</option>
+                ))}
+              </select>
+            </label>
+            <div className="room-actions" aria-label="Действия с помещениями">
+              <button className="icon-button" type="button" title="Создать помещение" aria-label="Создать помещение" onClick={() => plannerRef.current?.createRoom()}>
+                <Plus size={iconSize} aria-hidden="true" />
+              </button>
+              <button
+                className="icon-button"
+                type="button"
+                title="Удалить активное помещение"
+                aria-label="Удалить активное помещение"
+                disabled={rooms.length <= 1}
+                onClick={() => plannerRef.current?.deleteActiveRoom()}
+              >
+                <Trash2 size={iconSize} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+          <label>
+            Название помещения
+            <input
+              className={roomNameError ? "invalid-input" : undefined}
+              type="text"
+              value={displayedRoomName}
+              aria-invalid={Boolean(roomNameError)}
+              aria-describedby={roomNameError ? "room-name-error" : undefined}
+              onChange={updateActiveRoomName}
+            />
+            {roomNameError && <span id="room-name-error" className="field-error">{roomNameError}</span>}
+          </label>
           <label>
             Единицы чертежа
             <select value={settings.drawUnit} onChange={updateDrawUnit}>
@@ -325,7 +411,7 @@ export default function App() {
             </div>
           </dl>
         </section>
-      </aside>
+      </aside>}
     </main>
   );
 }
