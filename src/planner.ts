@@ -41,6 +41,13 @@ interface SegmentInsertHit {
   distance: number;
 }
 
+type PointAction = "move" | "delete";
+
+interface PointActionHit {
+  action: PointAction;
+  index: number;
+}
+
 export interface PlannerApi {
   setSettings(settings: PlannerSettings): void;
   exportProject(): SavedProject;
@@ -48,6 +55,9 @@ export interface PlannerApi {
   closePolygon(): void;
   removeLastPoint(): void;
   clear(): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  setPanToolEnabled(enabled: boolean): void;
   destroy(): void;
 }
 
@@ -55,6 +65,7 @@ export interface PlannerInitOptions {
   settings: PlannerSettings;
   onSettingsChange(settings: PlannerSettings): void;
   onStatsChange(stats: PlannerStats): void;
+  onPanToolChange(active: boolean): void;
 }
 
 export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptions): PlannerApi {
@@ -219,6 +230,13 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       y: (point.y - state.viewPanY) / state.viewZoom,
     };
   }
+
+  function worldToScreen(point: Point): Point {
+    return {
+      x: point.x * state.viewZoom + state.viewPanX,
+      y: point.y * state.viewZoom + state.viewPanY,
+    };
+  }
   
   function screenPointerPosition(event: PointerEvent | WheelEvent): Point {
     const rect = canvas.getBoundingClientRect();
@@ -377,6 +395,106 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
       state.viewportHeight - 18,
     );
   }
+
+  function pointActionButtons(): Array<{ action: PointAction; x: number; y: number; width: number; height: number }> {
+    const selectedPoint = state.points[state.selectedPointIndex];
+    if (!selectedPoint) return [];
+
+    const screenPoint = worldToScreen(selectedPoint);
+    const width = 36;
+    const height = 32;
+    const gap = 6;
+    const totalWidth = width * 2 + gap;
+    const x = Math.min(Math.max(screenPoint.x - totalWidth / 2, 8), state.viewportWidth - totalWidth - 8);
+    const y = Math.min(screenPoint.y + 16, state.viewportHeight - height - 8);
+
+    return [
+      { action: "move", x, y, width, height },
+      { action: "delete", x: x + width + gap, y, width, height },
+    ];
+  }
+
+  function pointActionAtScreenPoint(point: Point): PointActionHit | null {
+    if (state.selectedPointIndex < 0) return null;
+    const hit = pointActionButtons().find((button) =>
+      point.x >= button.x &&
+      point.x <= button.x + button.width &&
+      point.y >= button.y &&
+      point.y <= button.y + button.height
+    );
+    return hit ? { action: hit.action, index: state.selectedPointIndex } : null;
+  }
+
+  function drawMoveIcon(x: number, y: number): void {
+    ctx.beginPath();
+    ctx.moveTo(x - 7, y);
+    ctx.lineTo(x + 7, y);
+    ctx.moveTo(x, y - 7);
+    ctx.lineTo(x, y + 7);
+    ctx.moveTo(x - 7, y);
+    ctx.lineTo(x - 3, y - 4);
+    ctx.moveTo(x - 7, y);
+    ctx.lineTo(x - 3, y + 4);
+    ctx.moveTo(x + 7, y);
+    ctx.lineTo(x + 3, y - 4);
+    ctx.moveTo(x + 7, y);
+    ctx.lineTo(x + 3, y + 4);
+    ctx.moveTo(x, y - 7);
+    ctx.lineTo(x - 4, y - 3);
+    ctx.moveTo(x, y - 7);
+    ctx.lineTo(x + 4, y - 3);
+    ctx.moveTo(x, y + 7);
+    ctx.lineTo(x - 4, y + 3);
+    ctx.moveTo(x, y + 7);
+    ctx.lineTo(x + 4, y + 3);
+    ctx.stroke();
+  }
+
+  function drawDeleteIcon(x: number, y: number): void {
+    ctx.beginPath();
+    ctx.rect(x - 6, y - 4, 12, 12);
+    ctx.moveTo(x - 8, y - 7);
+    ctx.lineTo(x + 8, y - 7);
+    ctx.moveTo(x - 3, y - 10);
+    ctx.lineTo(x + 3, y - 10);
+    ctx.moveTo(x - 2, y - 1);
+    ctx.lineTo(x - 2, y + 6);
+    ctx.moveTo(x + 2, y - 1);
+    ctx.lineTo(x + 2, y + 6);
+    ctx.stroke();
+  }
+
+  function drawPointActions(): void {
+    if (state.selectedPointIndex < 0 || state.draggingIndex >= 0) return;
+    const buttons = pointActionButtons();
+    if (buttons.length === 0) return;
+
+    ctx.save();
+    ctx.font = "12px Inter, system-ui, sans-serif";
+    buttons.forEach((button) => {
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = button.action === "delete" ? "#d66b4a" : "#95a9ad";
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      roundedRectPath(ctx, button.x, button.y, button.width, button.height, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.strokeStyle = button.action === "delete" ? "#a64924" : "#1f4f45";
+      ctx.lineWidth = 1.8;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      const center = {
+        x: button.x + button.width / 2,
+        y: button.y + button.height / 2,
+      };
+      if (button.action === "move") {
+        drawMoveIcon(center.x, center.y);
+      } else {
+        drawDeleteIcon(center.x, center.y);
+      }
+    });
+    ctx.restore();
+  }
   
   function drawGuides(): void {
     if (state.guides.length === 0) return;
@@ -441,6 +559,13 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     ctx.stroke();
   
     state.points.forEach((point, index) => {
+      if (index === state.selectedPointIndex) {
+        ctx.beginPath();
+        ctx.strokeStyle = "#f2b84b";
+        ctx.lineWidth = 3;
+        ctx.arc(point.x, point.y, 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.beginPath();
       ctx.fillStyle = index === state.draggingIndex ? "#c85f35" : "#2f6f62";
       ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
@@ -575,7 +700,9 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     drawPolygon();
     ctx.restore();
     drawGridScaleLabel();
+    drawPointActions();
     updateStats(tileResult);
+    updateCanvasCursor();
     saveAppState();
   }
   
@@ -594,11 +721,37 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   
   function handlePointerDown(event: PointerEvent): void {
     canvas.focus();
+    const screenPoint = screenPointerPosition(event);
+
+    if (event.button === 0) {
+      const actionHit = pointActionAtScreenPoint(screenPoint);
+      if (actionHit?.action === "delete") {
+        event.preventDefault();
+        deletePoint(actionHit.index);
+        return;
+      }
+      if (actionHit?.action === "move") {
+        event.preventDefault();
+        const point = pointerPosition(event);
+        const selectedPoint = state.points[actionHit.index];
+        if (!selectedPoint) return;
+        state.guides = [];
+        state.draggingIndex = actionHit.index;
+        state.dragSnapshot = snapshotGeometry(state);
+        state.dragOffset = {
+          x: selectedPoint.x - point.x,
+          y: selectedPoint.y - point.y,
+        };
+        canvas.setPointerCapture(event.pointerId);
+        render();
+        return;
+      }
+    }
   
-    if (event.button === 1) {
+    if (event.button === 1 || (event.button === 0 && state.panToolEnabled)) {
       event.preventDefault();
       state.panning = true;
-      state.lastPanPoint = screenPointerPosition(event);
+      state.lastPanPoint = screenPoint;
       canvas.setPointerCapture(event.pointerId);
       render();
       return;
@@ -623,13 +776,13 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     }
   
     if (nearestIndex >= 0) {
+      event.preventDefault();
       state.guides = [];
-      state.draggingIndex = nearestIndex;
-      state.dragSnapshot = snapshotGeometry(state);
-      canvas.setPointerCapture(event.pointerId);
+      state.selectedPointIndex = nearestIndex;
       render();
       return;
     }
+    state.selectedPointIndex = -1;
     const segmentHit = segmentAtPoint(point);
     if (segmentHit && !state.drawingSegment) {
       const beforeSnapshot = snapshotGeometry(state);
@@ -672,7 +825,14 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     }
     if (state.draggingIndex < 0) return;
     const dragAnchor = state.dragSnapshot?.points?.[state.draggingIndex] || null;
-    state.points[state.draggingIndex] = snapPoint(pointerPosition(event), {
+    const pointerPoint = pointerPosition(event);
+    const offsetPoint = state.dragOffset
+      ? {
+        x: pointerPoint.x + state.dragOffset.x,
+        y: pointerPoint.y + state.dragOffset.y,
+      }
+      : pointerPoint;
+    state.points[state.draggingIndex] = snapPoint(offsetPoint, {
       excludeIndex: state.draggingIndex,
       anchor: dragAnchor,
     });
@@ -686,6 +846,7 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     }
     state.draggingIndex = -1;
     state.dragSnapshot = null;
+    state.dragOffset = null;
     state.panning = false;
     state.lastPanPoint = null;
     if (finishedDrag) {
@@ -700,13 +861,32 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   function handleWheel(event: WheelEvent): void {
     event.preventDefault();
     const screenPoint = screenPointerPosition(event);
+    zoomAtScreenPoint(screenPoint, event.deltaY < 0 ? 1.12 : 1 / 1.12);
+  }
+
+  function zoomAtScreenPoint(screenPoint: Point, zoomFactor: number): void {
     const worldPoint = screenToWorld(screenPoint);
-    const zoomFactor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
     const nextZoom = Math.min(Math.max(state.viewZoom * zoomFactor, 0.25), 6);
   
     state.viewZoom = nextZoom;
     state.viewPanX = screenPoint.x - worldPoint.x * nextZoom;
     state.viewPanY = screenPoint.y - worldPoint.y * nextZoom;
+    render();
+  }
+
+  function setPanToolEnabled(enabled: boolean): void {
+    if (state.panToolEnabled === enabled) return;
+    state.panToolEnabled = enabled;
+    state.panning = false;
+    state.lastPanPoint = null;
+    if (enabled) {
+      state.selectedPointIndex = -1;
+      state.draggingIndex = -1;
+      state.dragSnapshot = null;
+      state.dragOffset = null;
+      cancelDrawingSegment();
+    }
+    options.onPanToolChange(enabled);
     render();
   }
   
@@ -718,6 +898,12 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
   
   function handleKeyDown(event: KeyboardEvent): void {
     const key = event.key.toLowerCase();
+    if (event.key === "Escape" && state.panToolEnabled) {
+      event.preventDefault();
+      setPanToolEnabled(false);
+      return;
+    }
+
     if ((event.ctrlKey || event.metaKey) && key === "z") {
       event.preventDefault();
       if (event.shiftKey) {
@@ -791,7 +977,25 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     pushUndoSnapshot(state, beforeSnapshot);
     state.draggingIndex = -1;
     state.dragSnapshot = null;
+    state.dragOffset = null;
+    state.selectedPointIndex = -1;
     cancelDrawingSegment();
+    render();
+  }
+
+  function deletePoint(index: number): void {
+    if (index < 0 || index >= state.points.length) return;
+    const beforeSnapshot = snapshotGeometry(state);
+    state.points.splice(index, 1);
+    if (state.points.length < 3) {
+      state.closed = false;
+    }
+    state.selectedPointIndex = -1;
+    state.draggingIndex = -1;
+    state.dragSnapshot = null;
+    state.dragOffset = null;
+    cancelDrawingSegment();
+    pushUndoSnapshot(state, beforeSnapshot);
     render();
   }
 
@@ -799,9 +1003,22 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     const beforeSnapshot = snapshotGeometry(state);
     state.points = [];
     state.closed = false;
+    state.selectedPointIndex = -1;
     cancelDrawingSegment();
     pushUndoSnapshot(state, beforeSnapshot);
     render();
+  }
+
+  function updateCanvasCursor(): void {
+    if (state.panning) {
+      canvas.style.cursor = "grabbing";
+    } else if (state.panToolEnabled) {
+      canvas.style.cursor = "grab";
+    } else if (state.draggingIndex >= 0) {
+      canvas.style.cursor = "move";
+    } else {
+      canvas.style.cursor = "crosshair";
+    }
   }
   
   restoreAppState();
@@ -838,6 +1055,13 @@ export function initPlanner(canvas: HTMLCanvasElement, options: PlannerInitOptio
     closePolygon: handleClosePolygon,
     removeLastPoint: handleRemoveLastPoint,
     clear: handleClear,
+    zoomIn() {
+      zoomAtScreenPoint({ x: state.viewportWidth / 2, y: state.viewportHeight / 2 }, 1.18);
+    },
+    zoomOut() {
+      zoomAtScreenPoint({ x: state.viewportWidth / 2, y: state.viewportHeight / 2 }, 1 / 1.18);
+    },
+    setPanToolEnabled,
     destroy() {
       unbindEvents();
       resizeObserver.disconnect();

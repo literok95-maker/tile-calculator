@@ -168,9 +168,25 @@ button[aria-pressed="true"] {
 }
 
 .canvas-wrap {
+  position: relative;
   min-height: 0;
   padding: 10px;
   overflow: hidden;
+}
+
+.canvas-controls {
+  position: absolute;
+  z-index: 2;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px;
+  border: 1px solid rgba(199, 208, 216, 0.86);
+  border-radius: 10px;
+  background: rgba(255, 253, 250, 0.92);
+  box-shadow: 0 8px 20px rgba(29, 35, 41, 0.12);
 }
 
 canvas {

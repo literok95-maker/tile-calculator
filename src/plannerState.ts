@@ -5,6 +5,7 @@ import type { Guide } from "./snap";
 export interface PlannerState extends GeometrySnapshot {
   draggingIndex: number;
   dragSnapshot: GeometrySnapshot | null;
+  dragOffset: Point | null;
   drawingSegment: boolean;
   draftPoint: Point | null;
   measureInput: string;
@@ -18,6 +19,8 @@ export interface PlannerState extends GeometrySnapshot {
   viewPanY: number;
   panning: boolean;
   lastPanPoint: Point | null;
+  selectedPointIndex: number;
+  panToolEnabled: boolean;
   undoStack: GeometrySnapshot[];
   redoStack: GeometrySnapshot[];
   snapOptions: SnapOptions;
@@ -34,6 +37,7 @@ export function createInitialPlannerState(): PlannerState {
     closed: true,
     draggingIndex: -1,
     dragSnapshot: null,
+    dragOffset: null,
     drawingSegment: false,
     draftPoint: null,
     measureInput: "",
@@ -47,6 +51,8 @@ export function createInitialPlannerState(): PlannerState {
     viewPanY: 0,
     panning: false,
     lastPanPoint: null,
+    selectedPointIndex: -1,
+    panToolEnabled: false,
     undoStack: [],
     redoStack: [],
     snapOptions: defaultSnapOptions(),
@@ -65,6 +71,8 @@ export function restoreGeometry(state: PlannerState, snapshot: GeometrySnapshot)
   state.closed = snapshot.closed;
   state.draggingIndex = -1;
   state.dragSnapshot = null;
+  state.dragOffset = null;
+  state.selectedPointIndex = -1;
   state.drawingSegment = false;
   state.draftPoint = null;
   state.measureInput = "";
