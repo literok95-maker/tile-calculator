@@ -167,6 +167,12 @@ export default function App() {
           <div>
             <h1>Расчет плитки на пол</h1>
             <p>Кликайте точки помещения, вводите точную длину сегмента с клавиатуры и проверяйте раскладку.</p>
+            <nav className="guide-links" aria-label="Инструкции и примеры расчета">
+              <span>Примеры:</span>
+              <a href="raskladka-plitki-elochkoy/">Плитка ёлочкой</a>
+              <a href="kalkulyator-plitki-60x60/">Плитка 60×60</a>
+              <a href="raschet-plitki-g-obraznoy-komnaty/">Г-образная комната</a>
+            </nav>
           </div>
           <div className="toolbar" aria-label="Инструменты">
             <div className="snap-menu">
